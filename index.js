@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { MongoClient } from  "mongodb";
 
+const API = "/api/"
 const app = express();
 
 app.use(cors());
@@ -15,27 +16,33 @@ try {
   console.log(" Connected!");
 
   let db = client.db("swtimeline");
-  let collection = db.collection("media");
+  // let collection = db.collection("media");
 
-  app.get("/test", async (req, res) => {
+  app.get(`${API}test`, async (req, res) => {
     await new Promise(r => setTimeout(r, 2000));
     res.json({ msg: "hello" });
   });
 
-  app.get("/media", async (req, res) => {
-    let media = await client.db("swtimeline").collection("media").find().toArray();
+  app.get(`${API}media`, async (req, res) => {
+    // TODO cache?
+    let media = await db.collection("media").find().toArray();
     res.json(media);
   });
 
-  app.put("/media/:title", async (req, res) => {
-    console.log(req.params.title);
-    console.dir(req.body, {depth: 5});
-    if (req.params.title !== req.body.title) {
-      res.status(400).json({ msg: "param title must be the same as title in the body" });
-    }
-    let ins = await collection.findOneAndReplace({ title: req.params.title }, req.body, { upsert: true });
-    res.json({ updatedExisting: ins.lastErrorObject.updatedExisting });
+  app.get(`${API}tv-images`, async (req, res) => {
+    let tvImages = await db.collection("tv-images").find().toArray();
+    res.json(tvImages);
   });
+
+  // app.put("/media/:title", async (req, res) => {
+  //   console.log(req.params.title);
+  //   console.dir(req.body, {depth: 5});
+  //   if (req.params.title !== req.body.title) {
+  //     res.status(400).json({ msg: "param title must be the same as title in the body" });
+  //   }
+  //   let ins = await collection.findOneAndReplace({ title: req.params.title }, req.body, { upsert: true });
+  //   res.json({ updatedExisting: ins.lastErrorObject.updatedExisting });
+  // });
 
 
   app.listen(5000, () => {

@@ -1,6 +1,7 @@
 import wtf from "wtf_wikipedia";
 import _ from "lodash";
 import * as fs from "fs/promises";
+import sharp from "sharp";
 import { decode } from "html-entities";
 import { MongoClient } from  "mongodb";
 import logWithStatusbar from "log-with-statusbar";
@@ -11,6 +12,30 @@ import md5 from "md5";
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
 
 const IMAGE_PATH = "../client/public/images/";
+const NUMBERS = {
+  'one': 1,
+  'two': 2,
+  'three': 3,
+  'four': 4,
+  'five': 5,
+  'six': 6,
+  'seven': 7,
+  'eight': 8,
+  'nine': 9,
+  'ten': 10,
+  'eleven': 11,
+  'twelve': 12,
+  'thirteen': 13,
+  'fourteen': 14,
+  'fifteen': 15,
+  'sixteen': 16,
+  'seventeen': 17,
+  'eighteen': 18,
+  'nineteen': 19,
+  'twenty': 20,
+};
+const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
+const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
 
 (() => {
   wtf.extend((models, templates) => {
@@ -69,7 +94,8 @@ ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${valu
     // so we make the normalized version part of the return value
     let normalizations = {};
     if (json.query.normalized) {
-      log.info("Normalized: ", json.query.normalized);
+      // log.info("Normalized: ", json.query.normalized);
+      // log.info("Normalized ", json.query.normalized.length, " items");
       for (let normalization of json.query.normalized) {
         normalizations[normalization.to] = normalization.from;
       }
@@ -311,11 +337,11 @@ const process = (sentence) => {
 
 log.info("Fetching timeline...");
 //let timelineDoc = wtf(timelineString);
-let timelineDoc = wtf(await fs.readFile("../client/sample_wikitext/timeline", "utf-8"));
-// let timelineDoc = wtf((await fetchWookiee("Timeline of canon media").next()).value.wikitext);
+// let timelineDoc = wtf(await fs.readFile("../client/sample_wikitext/timeline", "utf-8"));
+let timelineDoc = wtf((await fetchWookiee("Timeline of canon media").next()).value.wikitext);
 //let timelineDoc = await fetchWookiee("Timeline_of_Legends_media");
 let data = timelineDoc.tables()[1].json();
-data = data.slice(0,8);
+// data = data.slice(0,50);
 
 const types = {
   C: "comic",
@@ -378,7 +404,11 @@ for await (let page of pages) {
   if (page.missing) 
     throw `Page missing! "${page.title}" is not a valid wookieepedia article.`;
 
-  let draft = drafts[page.normalizedFrom ?? page.title];
+  if (page.normalizedFrom) {
+    drafts[page.title] = drafts[page.normalizedFrom];
+    delete drafts[page.normalizedFrom];
+  }
+  let draft = drafts[page.title];
   draft.title = page.title;
   draft.wookieepediaId = page.pageid;
   draft.revisionTimestamp = page.timestamp;
@@ -474,8 +504,14 @@ for await (let page of pages) {
 
   for (const [key, value] of Object.entries({
     releaseDateDetails: releaseDateDetails,
+    closed: infobox.get("closed"),
     author: infobox.get("author"),
     writerDetails: infobox.get("writer"),
+    developer: infobox.get("developer"),
+    seasonDetails: infobox.get("season"),
+    episode: infobox.get("episode"),
+    production: infobox.get("production"),
+    guests: infobox.get("guests"),
     director: infobox.get("director"),
     producer: infobox.get("producer"),
     starring: infobox.get("starring"),
@@ -497,14 +533,45 @@ for await (let page of pages) {
     editor: infobox.get("editor"),
     mediaType: infobox.get("media type"),
     publishedIn: infobox.get("published in"),
-    series: infobox.get("series"),
+    engine: infobox.get("engine"),
+    genre: infobox.get("genre"),
+    modes: infobox.get("modes"),
+    ratings: infobox.get("ratings"),
+    platforms: infobox.get("platforms"),
+    seriesDetails: infobox.get("series"),
+    basegame: infobox.get("basegame"),
+    expansions: infobox.get("expansions"),
+    designer: infobox.get("designer"),
+    programmer: infobox.get("programmer"),
+    artist: infobox.get("artist"),
+    composer: infobox.get("composer"),
+    issue: infobox.get("issue"),
+    prev: infobox.get("prev"),
+    next: infobox.get("next"),
     precededBy: infobox.get("preceded by"),
     followedBy: infobox.get("followed by"),
+    upc: infobox.get("upc"),
+    isbn: infobox.get("isbn"),
   })) {
     draft[key] = process(value);
   }
 
   draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
+  draft.series = infobox.get("series").links()?.map(e => decode(e.page())) || null;
+  let seasonText = infobox.get("season").text();
+  if (seasonText) {
+    let seasonTextClean = seasonText.toLowerCase().trim();
+    // draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
+    // if (!draft.season) {
+      // We use word boundaries as last resort (and log it) in order to avoid false positives.
+      // ^^^ scratch that, makes the log too messy, let's just use the word boundaries, yolo
+      // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
+      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
+      if (!draft.season) {
+        log.warn(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
+      }
+    // }
+  }
 
   // Delete empty values
   for (const [key, value] of Object.entries(draft)) {
@@ -586,50 +653,102 @@ let covers = Object.values(drafts).map(draft => draft.coverWook).filter(s => s);
 outOf = covers.length;
 let imageinfos = fetchImageInfo(covers);
 
+const fileExists = async (path) => {
+  try {
+    await fs.stat(path);
+  }
+  catch (e) {
+    if (e.code === "ENOENT") {
+      return false;
+    }
+    throw e;
+  }
+  return true;
+};
+
+const Size = Object.freeze({
+  THUMB: "thumb/",
+  MEDIUM: "medium/",
+  SMALL: "small/",
+  FULL: "",
+});
+
+const anyMissing = async (exists, filename) => {
+  for (const [key, value] of Object.entries(Size)) {
+    exists[key] = await fileExists(`${IMAGE_PATH}${value}${filename}`);
+  }
+  return Object.values(exists).some(e => e === false);
+}
+
 for await (let imageinfo of imageinfos) {
   // Keep in mind imageinfo.title is a filename of the image, not the article title
   let articleTitle = titlesDict[imageinfo.normalizedFrom ?? imageinfo.title];
   let current = currentCovers[articleTitle];
+  let exists = {};
 
-  // TODO maybe check if file exists, in case it got deleted?
   if (
     !current || // new media (not in DB yet)
     !current.cover || // cover got added
-    current.coverTimestamp < imageinfo.timestamp // cover got updated
+    current.coverTimestamp < imageinfo.timestamp || // cover got updated
+    await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing) TODO remove?
   ) {
     if (!imageinfo.title.startsWith("File:")) // Just to make sure. Should never happen. TODO remove
       log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
     // remove leading "File:"
     let myFilename = imageinfo.title.slice(5);
+    let buffer;
 
-    let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } });
-    if (!resp.ok) {
-      throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
+    // code to pick up from incomplete fetches
+    /*let pos = myFilename.lastIndexOf(".");
+    myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
+    // We got the cover but it's not in the db (due to previous incomplete fetch)
+    if (!current && !(await anyMissing(exists, myFilename))) {
+      buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
-    if (resp.headers.get("Content-Type") === "image/webp") {
-      let pos = myFilename.lastIndexOf(".");
-      myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
+    else*/ if (!exists.FULL) {
+      let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } });
+      if (!resp.ok) {
+        throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
+      }
+      if (resp.headers.get("Content-Type") === "image/webp") {
+        let pos = myFilename.lastIndexOf(".");
+        myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
+      }
+      else {
+        log.warn(`Image in non webp. article: ${articleTitle}, filename: ${myFilename}`);
+      }
+      log.info(`Recieved ${toHumanReadable((await resp.clone().blob()).size)} of image "${imageinfo.title}"`);
+      buffer = await resp.buffer();
     }
     else {
-      log.warn(`Image in non webp. article: ${articleTitle}, filename: ${myFilename}`);
+      myFilename = current.cover;
+      buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
-    log.info(`Recieved ${toHumanReadable((await resp.clone().blob()).size)} of image "${imageinfo.title}"`);
-    let buffer = await resp.buffer();
     log.info(`Writing cover for "${articleTitle}" named "${myFilename}"`);
-    await fs.writeFile(`${IMAGE_PATH}${myFilename}`, buffer);
+    if (!exists.FULL) await fs.writeFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`, buffer);
+    if (!exists.MEDIUM) await sharp(buffer).webp({ nearLossless: true }).resize(500).toFile(`${IMAGE_PATH}${Size.MEDIUM}${myFilename}`);
+    if (!exists.SMALL) await sharp(buffer).webp({ nearLossless: true }).resize(220).toFile(`${IMAGE_PATH}${Size.SMALL}${myFilename}`);
+    if (!exists.THUMB) await sharp(buffer).webp({ nearLossless: true }).resize(55).toFile(`${IMAGE_PATH}${Size.THUMB}${myFilename}`);
     drafts[articleTitle].cover = myFilename;
     drafts[articleTitle].coverTimestamp = imageinfo.timestamp;
+    drafts[articleTitle].coverSha1 = imageinfo.sha1;
 
     // If we had a cover already and it didn't get overwritten, delete it
     if (current?.cover && current.cover !== myFilename) {
       log.info(`Deleteing old cover: ${current.cover} in favor of ${myFilename}`);
-      fs.unlink(`${IMAGE_PATH}${current.cover}`);
+      try {
+        await fs.unlink(`${IMAGE_PATH}${current.cover}`);
+      } catch (e) {
+        if (!e.code === "ENOENT") // It's already deleted
+          throw e;
+      }
     }
   }
   else {
-    log.info(`Up to date cover exists for ${articleTitle}`);
+    // log.info(`Up to date cover exists for ${articleTitle}`);
     drafts[articleTitle].cover = current.cover;
     drafts[articleTitle].coverTimestamp = current.coverTimestamp;
+    drafts[articleTitle].coverSha1 = current.coverSha1;
   }
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 } 
@@ -649,6 +768,9 @@ collection.deleteMany({});
 log.info("Writing to DB...");
 // TODO: We should probably do some overwriting based on timeline entries to remove stale/orphaned documents
 await collection.bulkWrite(operations);
+
+let tvShows = await collection.distinct("series", {type: "tv"});
+// check for new shows
 
 await client.close();
 log.info("Done!");
