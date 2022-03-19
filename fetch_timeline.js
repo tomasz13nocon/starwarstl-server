@@ -47,6 +47,12 @@ const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMB
       return `((${x.value}))`;
     };
 
+    templates.circa = (tmpl, list) => {
+      let x = parse(tmpl, ["value"]);
+      list.push({ template: "C", value: x.value });
+      return `((Approximate date))`;
+    };
+
     // Ignore quotes found at the begining of articles so that the first paragraph is the actual article
     templates.quote = (tmpl, list) => {
       list.push(parse(tmpl, ["text", "author"]));
@@ -61,6 +67,38 @@ const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMB
     };
   });
 })();
+
+const toCamelCase = str => {
+  return str.replace(/(?:^\w|[A-Z]|\b\w)/g, function(word, index) {
+    return index === 0 ? word.toLowerCase() : word.toUpperCase();
+  }).replace(/\s+/g, '');
+};
+
+// keys is an array of:
+// - strings representing infobox key
+// - objects where:
+// -- aliases: array of strings, where the first element is an infobox key (this is used for DB key) and the rest are aliases
+// -- details: boolean wheter to add "Details" to the key name
+// returns object mapping camelCased key for DB to infobox value
+const getInfoboxData = (infobox, keys) => {
+  let ret = {};
+  for (let key of keys) {
+    if (typeof key === "string")
+      key = { aliases: [key] };
+    let value;
+
+    for (let alias of key.aliases) {
+      value = infobox.get(alias);
+      if (value.text() !== "")
+        break;
+    }
+    let dbKey = toCamelCase(key.aliases[0]);
+    if (key.details)
+      dbKey += "Details";
+    ret[dbKey] = value;
+  }
+  return ret;
+};
 
 const toHumanReadable = (n) => {
   if (n < 1000) return `${n} B`;
@@ -149,6 +187,9 @@ const fetchImageInfo = async function* (titles) {
   }
 };
 
+/**
+ * If article doesn't exist returns null
+ */
 const docFromTitle = async (title) => {
   let page = (await fetchWookiee(title).next()).value;
   if (page.missing)
@@ -230,7 +271,7 @@ const processNotes = (textNode) => {
 };
 
 // I'm not proud of this code but it just werks™
-const process = (sentence) => {
+const processAst = (sentence) => {
   if (!sentence) return sentence;
 
   // What follows is a rather nasty code that reads lists from the sentence's ast.
@@ -253,23 +294,23 @@ const process = (sentence) => {
 
     // PSEUDO CODE
     /*
-		Special case for first line starting with a star
-			open list
+        Special case for first line starting with a star
+            open list
 
-		Loop through \n occurences
-			If followed by *
-				add preceding text to current
-				If current is list
-					add new list item to list
-				Else
-					open list
-			Else // not followed by *
-				If current is list
-					add preceding text to current
-					close list
-				Else // current is not list
-					concat preceding text with compunding text
-			*/
+        Loop through \n occurences
+            If followed by *
+                add preceding text to current
+                If current is list
+                    add new list item to list
+                Else
+                    open list
+            Else // not followed by *
+                If current is list
+                    add preceding text to current
+                    close list
+                Else // current is not list
+                    concat preceding text with compunding text
+                    */
 
     // When a list is at the beginning the star isn't preceded by \n
     if (i === 0 && astNode.text.startsWith("*")) {
@@ -358,6 +399,7 @@ const types = {
 let operations = [];
 let drafts = {};
 let nopageDrafts = [];
+let tvTypes = {};
 
 log.info("Processing timeline...");
 for (let [i, item] of data.entries()) {
@@ -377,8 +419,9 @@ for (let [i, item] of data.entries()) {
       log.warn("Timeline parsing warning: Unknown type, skipping. type: " + item.col2.text);
     continue;
   }
-  if (isNaN(new Date(draft.releaseDate)))
-    delete draft.releaseDate;
+  // TODO: uncomment?
+  // if (isNaN(new Date(draft.releaseDate)))
+    // delete draft.releaseDate;
 
   // This usually happens for some yet to be release media like tv episodes
   if (!draft.title) {
@@ -493,67 +536,67 @@ for await (let page of pages) {
     .get("image")
     ?.text()
     .match(/\[\[(File:.*)\]\]/)?.[1];
-    // .match(/\[\[File:(.*)\]\]/)?.[1];
+  // .match(/\[\[File:(.*)\]\]/)?.[1];
 
-  let releaseDateDetails;
-  for (let alias of [ "release date", "airdate", "publication date", "released" ]) {
-    releaseDateDetails = infobox.get(alias);
-    if (releaseDateDetails.text() !== "")
-      break;
-  }
-
-  for (const [key, value] of Object.entries({
-    releaseDateDetails: releaseDateDetails,
-    closed: infobox.get("closed"),
-    author: infobox.get("author"),
-    writerDetails: infobox.get("writer"),
-    developer: infobox.get("developer"),
-    seasonDetails: infobox.get("season"),
-    episode: infobox.get("episode"),
-    production: infobox.get("production"),
-    guests: infobox.get("guests"),
-    director: infobox.get("director"),
-    producer: infobox.get("producer"),
-    starring: infobox.get("starring"),
-    music: infobox.get("music"),
-    runtime: infobox.get("runtime"),
-    budget: infobox.get("budget"),
-    penciller: infobox.get("penciller"),
-    inker: infobox.get("inker"),
-    letterer: infobox.get("letterer"),
-    colorist: infobox.get("colorist"),
-    editor: infobox.get("editor"),
-    language: infobox.get("language"),
-    publisherDetails: infobox.get("publisher"),
-    pages: infobox.get("pages"),
-    isbn: infobox.get("isbn"),
-    coverArtist: infobox.get("cover artist"),
-    dateDetails: infobox.get("timeline"),
-    illustrator: infobox.get("illustrator"),
-    editor: infobox.get("editor"),
-    mediaType: infobox.get("media type"),
-    publishedIn: infobox.get("published in"),
-    engine: infobox.get("engine"),
-    genre: infobox.get("genre"),
-    modes: infobox.get("modes"),
-    ratings: infobox.get("ratings"),
-    platforms: infobox.get("platforms"),
-    seriesDetails: infobox.get("series"),
-    basegame: infobox.get("basegame"),
-    expansions: infobox.get("expansions"),
-    designer: infobox.get("designer"),
-    programmer: infobox.get("programmer"),
-    artist: infobox.get("artist"),
-    composer: infobox.get("composer"),
-    issue: infobox.get("issue"),
-    prev: infobox.get("prev"),
-    next: infobox.get("next"),
-    precededBy: infobox.get("preceded by"),
-    followedBy: infobox.get("followed by"),
-    upc: infobox.get("upc"),
-    isbn: infobox.get("isbn"),
-  })) {
-    draft[key] = process(value);
+  for (const [key, value] of Object.entries(
+    getInfoboxData(infobox, [
+      { aliases: ["release date", "airdate", "publication date", "released", "first aired"], details: true },
+      "closed",
+      "author",
+      { aliases: ["writer", "writers"], details: true },
+      "developer",
+      { aliases: ["season"], details: true },
+      "episode",
+      "production",
+      "guests",
+      { aliases: ["director", "directors"] },
+      "producer",
+      "starring",
+      "music",
+      "runtime",
+      "budget",
+      "penciller",
+      "inker",
+      "letterer",
+      "colorist",
+      "editor",
+      "language",
+      { aliases: ["publisher"], details: true },
+      "pages",
+      "cover artist",
+      { aliases: ["dateDetails", "timeline"] },
+      "illustrator",
+      "editor",
+      "media type",
+      "published in",
+      "engine",
+      "genre",
+      "modes",
+      "ratings",
+      "platforms",
+      { aliases: ["series"], details: true },
+      "basegame",
+      "expansions",
+      "designer",
+      "programmer",
+      "artist",
+      "composer",
+      "issue",
+      "num episodes",
+      "num seasons",
+      "network",
+      // "last aired", // TODO process like we do release date, also do first aired as a column in frontend instead of release date
+      "creators",
+      "executive producers",
+      "prev",
+      "next",
+      "preceded by",
+      "followed by",
+      "upc",
+      "isbn"
+    ])
+  )) {
+    draft[key] = processAst(value);
   }
 
   draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
@@ -561,16 +604,49 @@ for await (let page of pages) {
   let seasonText = infobox.get("season").text();
   if (seasonText) {
     let seasonTextClean = seasonText.toLowerCase().trim();
-    // draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
-    // if (!draft.season) {
+    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
+    if (draft.season === undefined) {
       // We use word boundaries as last resort (and log it) in order to avoid false positives.
-      // ^^^ scratch that, makes the log too messy, let's just use the word boundaries, yolo
       // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
       draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
-      if (!draft.season) {
-        log.warn(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
+      if (draft.season && (seasonTextClean.search(/shorts/i) !== -1))
+        draft.seasonNote = "shorts";
+
+      if (draft.season === undefined) {
+        log.error(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
       }
-    // }
+    }
+  }
+
+  // Full types
+  if (draft.type === "book") {
+    if (type === "audiobook")
+      // TODO: determine audio drama from categories
+      draft.fullType = "book-audio";
+    else
+      draft.fullType = `book-${draft.audience}`;
+  }
+  else if (draft.type === "tv" && draft.series?.length) {
+    if (tvTypes[draft.series])
+      draft.fullType = tvTypes[draft.series];
+    else {
+      let seriesDoc = await docFromTitle(draft.series);
+      if (!seriesDoc) {
+        log.error(`Tried to fetch series "${draft.series}" for tv item "${draft.title}" but it failed.`);
+      }
+      else {
+        // If problematic, change sentence(0) to paragraph(0)
+        if (seriesDoc.sentence(0).text().search(/micro[- ]series/i) !== -1)
+          draft.fullType = "tv-micro-series";
+        else if (seriesDoc.categories().includes("Canon animated television series"))
+          draft.fullType = "tv-animated";
+        else if (seriesDoc.categories().includes("Canon live-action television series"))
+          draft.fullType = "tv-live-action";
+        else
+          log.error(`Tv series neither live action nor animated nor micro series. Series: "${draft.series}", categories: ${seriesDoc.categories()}`);
+        tvTypes[draft.series] = draft.fullType;
+      }
+    }
   }
 
   // Delete empty values
@@ -579,30 +655,28 @@ for await (let page of pages) {
       delete draft[key];
   }
 
-  let rawDate = draft.releaseDateDetails;
-  if (rawDate) {
-    if (typeof rawDate === "string") {
-      // This happens only when the date is all plain text (without links, notes) which doesn't seem to be the case ever
-      draft.releaseDateDetails = { date: normalizeDate(rawDate) };
-    } else if (Array.isArray(rawDate)) {
-      // This should always be the case
-      const processDate = (item) => {
-        let text = item
-          .filter((e) => e.type === "text" || e.type.includes("link"))
-          .reduce((acc, e) => (acc += e.text || e.page), "");
-        let obj = { date: normalizeDate(text) };
-        let note = item.find((e) => e.type === "note");
-        if (note) obj.note = note.text;
-        return obj;
-      };
-      if (rawDate[0]) {
-        draft.releaseDateDetails =
-          rawDate[0].type === "list"
-          ? rawDate[0].data.map((e) => processDate(e))
-          : processDate(rawDate);
-      }
-    }
-  }
+  // let rawDate = draft.releaseDateDetails;
+  // if (rawDate) {
+  //   if (typeof rawDate === "string") { // This happens only when the date is all plain text (without links, notes) which doesn't seem to be the case ever
+  //     draft.releaseDateDetails = { date: normalizeDate(rawDate) };
+  //   } else if (Array.isArray(rawDate)) { // This should always be the case
+  //     const processDate = (item) => {
+  //       let text = item
+  //         .filter((e) => e.type === "text" || e.type.includes("link"))
+  //         .reduce((acc, e) => (acc += e.text || e.page), "");
+  //       let obj = { date: normalizeDate(text) };
+  //       let note = item.find((e) => e.type === "note");
+  //       if (note) obj.note = note.text;
+  //       return obj;
+  //     };
+  //     if (rawDate[0]) {
+  //       draft.releaseDateDetails =
+  //         rawDate[0].type === "list"
+  //         ? rawDate[0].data.map((e) => processDate(e))
+  //         : processDate(rawDate);
+  //     }
+  //   }
+  // }
 
   ///////////////////////////////////
   ///////////////////////////////////
@@ -701,7 +775,7 @@ for await (let imageinfo of imageinfos) {
     // code to pick up from incomplete fetches
     /*let pos = myFilename.lastIndexOf(".");
     myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
-    // We got the cover but it's not in the db (due to previous incomplete fetch)
+// We got the cover but it's not in the db (due to previous incomplete fetch)
     if (!current && !(await anyMissing(exists, myFilename))) {
       buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
@@ -769,8 +843,14 @@ log.info("Writing to DB...");
 // TODO: We should probably do some overwriting based on timeline entries to remove stale/orphaned documents
 await collection.bulkWrite(operations);
 
-let tvShows = await collection.distinct("series", {type: "tv"});
-// check for new shows
+let tvShowsNew = await collection.distinct("series", {type: "tv"});
+let tvShowsOld = await db.collection("tv-images").find({}, {series: 1}).toArray();
+tvShowsOld = tvShowsOld.map(o => o.series);
+for (let show of tvShowsNew) {
+  if (!tvShowsOld.includes(show)) {
+    log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
+  }
+}
 
 await client.close();
 log.info("Done!");
