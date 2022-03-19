@@ -206,8 +206,6 @@ const getAudience = async (doc) => {
   if (categories.includes("Canon adult novels")) return "a";
   if (categories.includes("Canon young-adult novels")) return "ya";
   if (categories.includes("Canon Young Readers")) return "yr";
-  // TODO: audio dramas
-  // if (categories.includes("Canon audio dramas")) return "ad";
   let sentence = doc.sentence(0).text();
   //let mediaType = doc.infobox().get("media type").text();
   const reg = (str) => {
@@ -238,14 +236,6 @@ const getAudience = async (doc) => {
   log.info(`sentence: ${seriesDoc.sentence(0)}, text: ${seriesDoc.sentence(0).text()}`);
   let seriesSentence = seriesDoc.sentence(0).text();
   return reg(seriesSentence);
-};
-
-// Returns "yyyy-mm-dd" from a date string
-const normalizeDate = (str) => {
-  let date = new Date(str);
-  return `${date.getFullYear()}-${(date.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
 };
 
 // Takes a text node, returns an array of text and note nodes. Also removes italics/bold... (I really need a new parser...)
@@ -419,7 +409,7 @@ for (let [i, item] of data.entries()) {
       log.warn("Timeline parsing warning: Unknown type, skipping. type: " + item.col2.text);
     continue;
   }
-  // TODO: uncomment?
+  // TODO: uncomment? "2022-??-??" is NaN tho..
   // if (isNaN(new Date(draft.releaseDate)))
     // delete draft.releaseDate;
 
@@ -464,9 +454,6 @@ for await (let page of pages) {
   // Getting data from the article //
   ///////////////////////////////////
   let doc = wtf(page.wikitext);
-  if (draft.type === "book" && !draft.audience)
-    draft.audience = await getAudience(doc);
-
   let infobox = doc.infobox();
   if (!infobox) {
     throw `NO INFOBOX!! title: ${draft.title}`;
@@ -544,6 +531,7 @@ for await (let page of pages) {
       "closed",
       "author",
       { aliases: ["writer", "writers"], details: true },
+      "narrator",
       "developer",
       { aliases: ["season"], details: true },
       "episode",
@@ -553,7 +541,7 @@ for await (let page of pages) {
       "producer",
       "starring",
       "music",
-      "runtime",
+      { aliases: ["runtime", "run time"] },
       "budget",
       "penciller",
       "inker",
@@ -585,7 +573,7 @@ for await (let page of pages) {
       "num episodes",
       "num seasons",
       "network",
-      // "last aired", // TODO process like we do release date, also do first aired as a column in frontend instead of release date
+      "last aired",
       "creators",
       "executive producers",
       "prev",
@@ -598,6 +586,10 @@ for await (let page of pages) {
   )) {
     draft[key] = processAst(value);
   }
+  
+  // ...
+  if (draft.isbn === "none")
+    delete draft.isbn;
 
   draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
   draft.series = infobox.get("series").links()?.map(e => decode(e.page())) || null;
@@ -609,7 +601,7 @@ for await (let page of pages) {
       // We use word boundaries as last resort (and log it) in order to avoid false positives.
       // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
       draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
-      if (draft.season && (seasonTextClean.search(/shorts/i) !== -1))
+      if (draft.season && /shorts/i.test(seasonTextClean))
         draft.seasonNote = "shorts";
 
       if (draft.season === undefined) {
@@ -620,11 +612,15 @@ for await (let page of pages) {
 
   // Full types
   if (draft.type === "book") {
-    if (type === "audiobook")
-      // TODO: determine audio drama from categories
-      draft.fullType = "book-audio";
-    else
+    if (doc.categories().includes("Canon audio dramas"))
+      draft.type = "audio drama";
+    else {
+      if (!draft.audience)
+        draft.audience = await getAudience(doc);
       draft.fullType = `book-${draft.audience}`;
+      if (type === "audiobook")
+        draft.audiobook = true;
+    }
   }
   else if (draft.type === "tv" && draft.series?.length) {
     if (tvTypes[draft.series])
@@ -636,7 +632,7 @@ for await (let page of pages) {
       }
       else {
         // If problematic, change sentence(0) to paragraph(0)
-        if (seriesDoc.sentence(0).text().search(/micro[- ]series/i) !== -1)
+        if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
           draft.fullType = "tv-micro-series";
         else if (seriesDoc.categories().includes("Canon animated television series"))
           draft.fullType = "tv-animated";
@@ -648,35 +644,20 @@ for await (let page of pages) {
       }
     }
   }
+  else if (draft.type === "game") {
+    if (doc.categories().includes("Canon mobile games"))
+      draft.fullType = "game-mobile";
+    else if (doc.categories().includes("Web-based games"))
+      draft.fullType = "game-browser";
+    else if (doc.categories().includes("Virtual reality") || doc.categories().includes("Virtual reality attractions") || doc.categories().includes("Virtual reality games") || /virtual[ -]reality/i.test(doc.sentence(0).text()))
+      draft.fullType = "game-vr";
+  }
 
   // Delete empty values
   for (const [key, value] of Object.entries(draft)) {
     if ((Array.isArray(value) && !value.length) || !value)
       delete draft[key];
   }
-
-  // let rawDate = draft.releaseDateDetails;
-  // if (rawDate) {
-  //   if (typeof rawDate === "string") { // This happens only when the date is all plain text (without links, notes) which doesn't seem to be the case ever
-  //     draft.releaseDateDetails = { date: normalizeDate(rawDate) };
-  //   } else if (Array.isArray(rawDate)) { // This should always be the case
-  //     const processDate = (item) => {
-  //       let text = item
-  //         .filter((e) => e.type === "text" || e.type.includes("link"))
-  //         .reduce((acc, e) => (acc += e.text || e.page), "");
-  //       let obj = { date: normalizeDate(text) };
-  //       let note = item.find((e) => e.type === "note");
-  //       if (note) obj.note = note.text;
-  //       return obj;
-  //     };
-  //     if (rawDate[0]) {
-  //       draft.releaseDateDetails =
-  //         rawDate[0].type === "list"
-  //         ? rawDate[0].data.map((e) => processDate(e))
-  //         : processDate(rawDate);
-  //     }
-  //   }
-  // }
 
   ///////////////////////////////////
   ///////////////////////////////////
