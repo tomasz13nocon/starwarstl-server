@@ -8,8 +8,16 @@ import logWithStatusbar from "log-with-statusbar";
 const log = logWithStatusbar();
 //import { default as fetchCache } from "node-fetch-cache";
 import { fetchBuilder, FileSystemCache } from "node-fetch-cache";
-import md5 from "md5";
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
+
+const debug = {
+  // Write a list of distinct infobox templates to file
+  distinctInfoboxes: true,
+  // Warn on bad, yet recoverable wikitext
+  badWikitext: false,
+  // Warn on redlinks
+  redlinks: false,
+};
 
 const IMAGE_PATH = "../client/public/images/";
 const NUMBERS = {
@@ -36,6 +44,13 @@ const NUMBERS = {
 };
 const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
 const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
+const seriesTypes = {
+  "book series": "book",
+  "comic series": "comic",
+  "movie": "film",
+  "television series": "tv",
+  "comic story arc": "comic",
+};
 
 (() => {
   wtf.extend((models, templates) => {
@@ -74,11 +89,13 @@ const toCamelCase = str => {
   }).replace(/\s+/g, '');
 };
 
-// keys is an array of:
+// `keys` is an array of (possibly mixed):
 // - strings representing infobox key
 // - objects where:
-// -- aliases: array of strings, where the first element is an infobox key (this is used for DB key) and the rest are aliases
+// -- aliases: array of strings, where the elements are possible names for the infobox key
+//    the first element is used for DB key, unless `name` is specified
 // -- details: boolean wheter to add "Details" to the key name
+// -- name: string to use as DB key instead of aliases[0]
 // returns object mapping camelCased key for DB to infobox value
 const getInfoboxData = (infobox, keys) => {
   let ret = {};
@@ -92,7 +109,7 @@ const getInfoboxData = (infobox, keys) => {
       if (value.text() !== "")
         break;
     }
-    let dbKey = toCamelCase(key.aliases[0]);
+    let dbKey = toCamelCase(key.name || key.aliases[0]);
     if (key.details)
       dbKey += "Details";
     ret[dbKey] = value;
@@ -364,7 +381,101 @@ const processAst = (sentence) => {
     : newAst;
 };
 
+const fillDraftWithInfoboxData = (draft, infobox) => {
+  for (const [key, value] of Object.entries(
+    getInfoboxData(infobox, [
+      { aliases: ["release date", "airdate", "publication date", "released", "first aired"], details: true },
+      "closed",
+      "author",
+      { aliases: ["writer", "writers"], details: true },
+      "narrator",
+      "developer",
+      { aliases: ["season"], details: true },
+      "episode",
+      "production",
+      "guests",
+      { aliases: ["director", "directors"] },
+      "producer",
+      "starring",
+      "music",
+      { aliases: ["runtime", "run time"] },
+      "budget",
+      "penciller",
+      "inker",
+      "letterer",
+      "colorist",
+      "editor",
+      "language",
+      { aliases: ["publisher"], details: true },
+      "pages",
+      "cover artist",
+      { name: "dateDetails", aliases: ["timeline"] },
+      "illustrator",
+      "editor",
+      "media type",
+      "published in",
+      "engine",
+      "genre",
+      "modes",
+      "ratings",
+      "platforms",
+      { aliases: ["series"], details: true },
+      "basegame",
+      "expansions",
+      "designer",
+      "programmer",
+      "artist",
+      "composer",
+      "issue",
+      "num episodes",
+      "num seasons",
+      "network",
+      "last aired",
+      "creators",
+      "executive producers",
+      "prev",
+      "next",
+      "preceded by",
+      "followed by",
+      "upc",
+      "isbn",
+      // { name: "coverWook", aliases: ["image"] },
+    ])
+  )) {
+    draft[key] = processAst(value);
+  }
 
+  draft.coverWook = infobox.get("image").text().match(/\[\[(File:.*)\]\]/)?.[1];
+
+  // no comment...
+  if (draft.isbn === "none")
+    delete draft.isbn;
+
+  draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
+  draft.series = infobox.get("series").links()?.map(e => decode(e.page())) || null;
+  let seasonText = infobox.get("season").text();
+  if (seasonText) {
+    let seasonTextClean = seasonText.toLowerCase().trim();
+    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
+    if (draft.season === undefined) {
+      // We use word boundaries as last resort (and log it) in order to avoid false positives.
+      // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
+      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
+      if (draft.season && /shorts/i.test(seasonTextClean))
+        draft.seasonNote = "shorts";
+
+      if (draft.season === undefined) {
+        log.error(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
+      }
+    }
+  }
+
+  // Delete empty values
+  for (const [key, value] of Object.entries(draft)) {
+    if ((Array.isArray(value) && !value.length) || value === undefined || value === null || value === "")
+      delete draft[key];
+  }
+};
 
 log.info("Fetching timeline...");
 //let timelineDoc = wtf(timelineString);
@@ -386,9 +497,9 @@ const types = {
 }
 
 
-let operations = [];
 let drafts = {};
 let nopageDrafts = [];
+let seriesDrafts = {};
 let tvTypes = {};
 
 log.info("Processing timeline...");
@@ -431,6 +542,7 @@ let outOf = Object.keys(drafts).length;
 log.setStatusBarText([`Article: ${progress}/${outOf}`]);
 
 let pages = fetchWookiee(Object.keys(drafts));
+let infoboxes = [], seriesInfoboxes = [];
 
 // while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
 for await (let page of pages) {
@@ -442,13 +554,13 @@ for await (let page of pages) {
     delete drafts[page.normalizedFrom];
   }
   let draft = drafts[page.title];
-  draft.title = page.title;
-  draft.wookieepediaId = page.pageid;
-  draft.revisionTimestamp = page.timestamp;
   // This should never happen with all the checks before
   if (draft === undefined) {
     throw `Mismatch between timeline title and the title received from the server for: "${page.title}"`;
   }
+  draft.title = page.title;
+  draft.wookieepediaId = page.pageid;
+  draft.revisionTimestamp = page.timestamp;
 
   ///////////////////////////////////
   // Getting data from the article //
@@ -456,12 +568,13 @@ for await (let page of pages) {
   let doc = wtf(page.wikitext);
   let infobox = doc.infobox();
   if (!infobox) {
-    throw `NO INFOBOX!! title: ${draft.title}`;
+    throw `No infobox! title: ${draft.title}`;
   }
 
+  if (debug.distinctInfoboxes && !infoboxes.includes(infobox._type))
+    infoboxes.push(infobox._type, "\n")
   let type, subtype;
   // It hurts the eyes a little to see capitalized and non capitalized values next to each other but the reason for this is the filter structure explained in home.js `createState` function.
-  // log.info(infobox._type);
   switch (infobox._type) {
     case "book":
       type = "book";
@@ -519,96 +632,7 @@ for await (let page of pages) {
       //case "media":
   }
 
-  draft.coverWook = infobox
-    .get("image")
-    ?.text()
-    .match(/\[\[(File:.*)\]\]/)?.[1];
-  // .match(/\[\[File:(.*)\]\]/)?.[1];
-
-  for (const [key, value] of Object.entries(
-    getInfoboxData(infobox, [
-      { aliases: ["release date", "airdate", "publication date", "released", "first aired"], details: true },
-      "closed",
-      "author",
-      { aliases: ["writer", "writers"], details: true },
-      "narrator",
-      "developer",
-      { aliases: ["season"], details: true },
-      "episode",
-      "production",
-      "guests",
-      { aliases: ["director", "directors"] },
-      "producer",
-      "starring",
-      "music",
-      { aliases: ["runtime", "run time"] },
-      "budget",
-      "penciller",
-      "inker",
-      "letterer",
-      "colorist",
-      "editor",
-      "language",
-      { aliases: ["publisher"], details: true },
-      "pages",
-      "cover artist",
-      { aliases: ["dateDetails", "timeline"] },
-      "illustrator",
-      "editor",
-      "media type",
-      "published in",
-      "engine",
-      "genre",
-      "modes",
-      "ratings",
-      "platforms",
-      { aliases: ["series"], details: true },
-      "basegame",
-      "expansions",
-      "designer",
-      "programmer",
-      "artist",
-      "composer",
-      "issue",
-      "num episodes",
-      "num seasons",
-      "network",
-      "last aired",
-      "creators",
-      "executive producers",
-      "prev",
-      "next",
-      "preceded by",
-      "followed by",
-      "upc",
-      "isbn"
-    ])
-  )) {
-    draft[key] = processAst(value);
-  }
-  
-  // ...
-  if (draft.isbn === "none")
-    delete draft.isbn;
-
-  draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
-  draft.series = infobox.get("series").links()?.map(e => decode(e.page())) || null;
-  let seasonText = infobox.get("season").text();
-  if (seasonText) {
-    let seasonTextClean = seasonText.toLowerCase().trim();
-    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
-    if (draft.season === undefined) {
-      // We use word boundaries as last resort (and log it) in order to avoid false positives.
-      // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
-      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
-      if (draft.season && /shorts/i.test(seasonTextClean))
-        draft.seasonNote = "shorts";
-
-      if (draft.season === undefined) {
-        log.error(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
-      }
-    }
-  }
+  fillDraftWithInfoboxData(draft, infobox);
 
   // Full types
   if (draft.type === "book") {
@@ -651,32 +675,44 @@ for await (let page of pages) {
       draft.fullType = "game-browser";
     else if (doc.categories().includes("Virtual reality") || doc.categories().includes("Virtual reality attractions") || doc.categories().includes("Virtual reality games") || /virtual[ -]reality/i.test(doc.sentence(0).text()))
       draft.fullType = "game-vr";
+    else
+      draft.fullType = "game";
   }
 
-  // Delete empty values
-  for (const [key, value] of Object.entries(draft)) {
-    if ((Array.isArray(value) && !value.length) || !value)
-      delete draft[key];
+  // Series handling
+  if (draft.series) {
+    for (let seriesTitle of draft.series) {
+      if (!(seriesTitle in seriesDrafts)) {
+        let seriesDoc = await docFromTitle(seriesTitle);
+        let seriesDraft = { title: seriesTitle }; // TODO writer, type
+        if (seriesDoc !== null) {
+          let seriesInfobox = seriesDoc.infobox();
+          if (seriesInfobox !== null) {
+            seriesDraft.type = seriesTypes[seriesInfobox._type];
+            if (seriesDraft.type === undefined)
+              throw `Series ${seriesTitle} has unknown infobox! Can't infer type.`;
+            if (debug.distinctInfoboxes && seriesInfobox && !(seriesInfoboxes.includes(seriesInfobox._type))) {
+              seriesInfoboxes.push(seriesInfobox._type, "\n");
+            }
+            fillDraftWithInfoboxData(seriesDraft, seriesInfobox);
+          }
+          else {
+            log.warn(`No infobox for series! title: ${draft.title}, series: ${seriesTitle}`);
+          }
+          seriesDrafts[seriesTitle] = seriesDraft;
+        }
+        else if (debug.redlinks) {
+          log.warn(`Series ${seriesTitle} is a redlink in article: ${draft.title}`);
+        }
+      }
+    }
   }
 
   ///////////////////////////////////
   ///////////////////////////////////
   ///////////////////////////////////
 
-    operations.push({ replaceOne: {
-      filter: { title: draft.title },
-      replacement: draft,
-      upsert: true,
-    }});
   log.setStatusBarText([`Article: ${++progress}/${outOf}`]);
-}
-
-for (let draft of nopageDrafts) {
-  operations.push({ replaceOne: {
-    filter: { title: draft.title },
-    replacement: draft,
-    upsert: true,
-  }})
 }
 
 log(`Article: ${progress}/${outOf}`);
@@ -685,18 +721,15 @@ log(`Article: ${progress}/${outOf}`);
 const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
 await client.connect();
 let db = client.db("swtimeline");
-let collection = db.collection("media");
+let media = db.collection("media");
 
 // TODO use a title index once I set it up
-let docs = await collection.find({}, {projection:{title: 1, cover: 1, coverTimestamp: 1}}).toArray();
+let docs = await media.find({}, {projection:{title: 1, cover: 1, coverTimestamp: 1}}).toArray();
+
 let currentCovers = {};
 for (let doc of docs) {
   currentCovers[doc.title] = doc;
 }
-
-log.info("Fetching imageinfo...");
-progress = 0;
-log.setStatusBarText([`Image: ${progress}/${outOf}`]);
 
 // We need a map of cover filenames to article titles in order to check for existing covers
 let titlesDict = {};
@@ -705,7 +738,12 @@ for (let v of Object.values(drafts)) {
 }
 
 let covers = Object.values(drafts).map(draft => draft.coverWook).filter(s => s); // filter out entires with no covers
+
+log.info("Fetching imageinfo...");
+log.setStatusBarText([`Image: ${progress}/${outOf}`]);
+progress = 0;
 outOf = covers.length;
+
 let imageinfos = fetchImageInfo(covers);
 
 const fileExists = async (path) => {
@@ -781,6 +819,7 @@ for await (let imageinfo of imageinfos) {
     }
     log.info(`Writing cover for "${articleTitle}" named "${myFilename}"`);
     if (!exists.FULL) await fs.writeFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`, buffer);
+    // TODO don't resize up??
     if (!exists.MEDIUM) await sharp(buffer).webp({ nearLossless: true }).resize(500).toFile(`${IMAGE_PATH}${Size.MEDIUM}${myFilename}`);
     if (!exists.SMALL) await sharp(buffer).webp({ nearLossless: true }).resize(220).toFile(`${IMAGE_PATH}${Size.SMALL}${myFilename}`);
     if (!exists.THUMB) await sharp(buffer).webp({ nearLossless: true }).resize(55).toFile(`${IMAGE_PATH}${Size.THUMB}${myFilename}`);
@@ -808,23 +847,17 @@ for await (let imageinfo of imageinfos) {
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 } 
 
-// log.info("Checking covers...")
-// let filenameHash = md5(draft.coverWook);
-// let wookImgUrl = `https://static.wikia.nocookie.net/starwars/images/${
-//     filenameHash[0]
-//   }/${filenameHash.slice(0, 2)}/${filename}`;
-// let resp = await fetch(wookImgUrl);
-// let buffer = await resp.buffer();
-// let imgHash = md5(buffer);
-// fs.writeFile(`${IMAGE_PATH}${wookImgUrl}`, buffer);
-
+let series = db.collection("series");
 log.info("Clearing DB...");
-collection.deleteMany({});
+media.deleteMany({});
+series.deleteMany({});
 log.info("Writing to DB...");
-// TODO: We should probably do some overwriting based on timeline entries to remove stale/orphaned documents
-await collection.bulkWrite(operations);
+await media.insertMany(Object.values(drafts));
+if (nopageDrafts.length)
+  await media.insertMany(nopageDrafts);
+await series.insertMany(Object.values(seriesDrafts));
 
-let tvShowsNew = await collection.distinct("series", {type: "tv"});
+let tvShowsNew = await media.distinct("series", {type: "tv"});
 let tvShowsOld = await db.collection("tv-images").find({}, {series: 1}).toArray();
 tvShowsOld = tvShowsOld.map(o => o.series);
 for (let show of tvShowsNew) {
@@ -834,4 +867,8 @@ for (let show of tvShowsNew) {
 }
 
 await client.close();
+if (debug.distinctInfoboxes) {
+  await fs.writeFile("infoboxes.txt", infoboxes);
+  await fs.writeFile("seriesInfoboxes.txt", seriesInfoboxes);
+}
 log.info("Done!");

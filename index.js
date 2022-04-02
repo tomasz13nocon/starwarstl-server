@@ -29,6 +29,13 @@ try {
     res.json(media);
   });
 
+  app.get(`${API}series`, async (req, res) => {
+    // TODO cache?
+    //TODO only titles
+    let series = await db.collection("series").find().toArray();
+    res.json(series);
+  });
+
   app.get(`${API}tv-images`, async (req, res) => {
     let tvImages = await db.collection("tv-images").find().toArray();
     res.json(tvImages);

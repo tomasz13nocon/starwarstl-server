@@ -1,0 +1,14 @@
+book
+comic book
+short story
+trade paperback
+comic story
+television series
+audiobook
+movie
+video game
+television episode
+television season
+comic series
+comic strip
+reference book
