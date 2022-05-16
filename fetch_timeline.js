@@ -15,9 +15,10 @@ const debug = {
   // Write a list of distinct infobox templates to file
   distinctInfoboxes: true,
   // Warn on bad, yet recoverable wikitext
-  badWikitext: false,
+  badWikitext: false, // not implemented
   // Warn on redlinks
   redlinks: false,
+  normalizations: false,
 };
 
 const CACHE_PAGES = true;
@@ -63,6 +64,10 @@ const seriesRegexes = {
   // "yr": /((series of books|book series).*?young children|young[- ]reader.*?(book series|series of books))/i,
 };
 let tvTypes = {};
+let redirectNum = 0;
+let bytesRecieved = 0;
+let imageBytesRecieved = 0;
+let requestNum = 0;
 
 (() => {
   wtf.extend((models, templates) => {
@@ -151,10 +156,13 @@ maxage=604800&\
 titles=${encodeURIComponent(titlesStr)}\
 ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${value}`, "")}`;
     const resp = cache ? await fetchCache(apiUrl) : await fetch(apiUrl); // TODO switch to normal fetch
+    requestNum++;
     if (!resp.ok) {
       throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
     }
-    log.info(`Recieved ${toHumanReadable((await resp.clone().blob()).size)} of ${apiParams.prop}`);
+    let respSize = (await resp.clone().blob()).size;
+    bytesRecieved += respSize;
+    log.info(`Recieved ${toHumanReadable(respSize)} of ${apiParams.prop}`); //  for titles: ${titles.slice(i, i+50)}
     const json = await resp.json();
     if (json.query === undefined) {
       log.error(apiUrl);
@@ -167,7 +175,8 @@ ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${valu
     // so we make the normalized version part of the return value
     let normalizations = {};
     if (json.query.normalized) {
-      // log.info("Normalized: ", json.query.normalized);
+      if (debug.normalizations)
+        log.info("Normalized: ", json.query.normalized);
       // log.info("Normalized ", json.query.normalized.length, " items");
       for (let normalization of json.query.normalized) {
         normalizations[normalization.to] = normalization.from;
@@ -191,14 +200,16 @@ const fetchWookiee = async function* (titles, cache = true) {
         missing: true,
       };
     }
-    yield {
-      title: page.title,
-      pageid: page.pageid,
-      wikitext: page.revisions?.[0].slots.main["*"],
-      timestamp: page.revisions?.[0].timestamp,
-      // If there's no normalization for this title this field is just undefined
-      normalizedFrom: page.normalizedFrom,
-    };
+    else {
+      yield {
+        title: page.title,
+        pageid: page.pageid,
+        wikitext: page.revisions?.[0].slots.main["*"],
+        timestamp: page.revisions?.[0].timestamp,
+        // If there's no normalization for this title this field is just undefined
+        normalizedFrom: page.normalizedFrom,
+      };
+    }
   }
 };
 
@@ -210,15 +221,17 @@ const fetchImageInfo = async function* (titles) {
         missing: true,
       };
     }
-    yield {
-      title: page.title,
-      pageid: page.pageid,
-      sha1: page.imageinfo?.[0].sha1,
-      timestamp: page.imageinfo?.[0].timestamp,
-      url: page.imageinfo?.[0].url,
-      // If there's no normalization for this title this field is just undefined
-      normalizedFrom: page.normalizedFrom,
-    };
+    else {
+      yield {
+        title: page.title,
+        pageid: page.pageid,
+        sha1: page.imageinfo?.[0].sha1,
+        timestamp: page.imageinfo?.[0].timestamp,
+        url: page.imageinfo?.[0].url,
+        // If there's no normalization for this title this field is just undefined
+        normalizedFrom: page.normalizedFrom,
+      };
+    }
   }
 };
 
@@ -232,6 +245,21 @@ const docFromTitle = async (title) => {
   return wtf(page.wikitext);
 }
 
+const reg = (str, title) => {
+  const jr = /junior|middle[ -]grade|chapter book|young[ -]reader|young children/i;
+  const ya = /young[ -]adult/i;
+  const a = /adult|canon novel/i;
+  const aLow = /novels/i;
+  if (jr.test(str)) return "jr";
+  if (ya.test(str)) return "ya";
+  if (a.test(str)) return "a";
+  if (aLow.test(str)) {
+    log.warn(`Low confidence guess of adult novel type for ${title} from sentence: ${str}`);
+    return "a";
+  }
+  return null;
+};
+
 // Returns a promise resolving to a target audience string from wtf doc or null if it can't figure it out
 const getAudience = async (doc) => {
   // We can't rely on books.disney.com even though it's the most official source,
@@ -243,16 +271,7 @@ const getAudience = async (doc) => {
   if (categories.includes("Canon Young Readers")) return "jr";
   let sentence = doc.sentence(0).text();
   //let mediaType = doc.infobox().get("media type").text();
-  const reg = (str) => {
-    let jr = /junior|middle[ -]grade|young[ -]reader/i;
-    let ya = /young[ -]adult/i;
-    let a = /adult|canon novel/i;
-    if (jr.test(str)) return "jr";
-    if (ya.test(str)) return "ya";
-    if (a.test(str)) return "a";
-    return null;
-  };
-  let regSentence = reg(sentence);
+  let regSentence = reg(sentence, doc.title());
   if (regSentence) return regSentence;
   let seriesTitle;
   try {
@@ -263,17 +282,19 @@ const getAudience = async (doc) => {
       e.name + ":",
       e.message
     );
-    log.error(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}`);
+    log.warn(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}`);
     return null;
   }
   log.info(`Getting series: ${seriesTitle} for ${doc.title()}`);
   let seriesDoc = await docFromTitle(seriesTitle);
+  if (seriesDoc === null)
+    throw `${seriesTitle} is not a valid wookieepedia article.`;
   log.info(`title: ${seriesDoc.title()} (fetched: ${seriesTitle})`);
   log.info(`sentence: ${seriesDoc.sentence(0)}, text: ${seriesDoc.sentence(0).text()}`);
   let seriesSentence = seriesDoc.sentence(0).text();
-  let regSeries = reg(seriesSentence);
+  let regSeries = reg(seriesSentence, doc.title());
   if (!regSeries)
-    log.error(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}\n nor its series' sentence: ${seriesSentence}`);
+    log.warn(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}\n nor its series' sentence: ${seriesSentence}`);
   return regSeries;
 };
 
@@ -496,7 +517,7 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
         draft.seasonNote = "shorts";
 
       if (draft.season === undefined) {
-        log.error(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
+        log.warn(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
       }
     }
   }
@@ -509,7 +530,7 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
 };
 
 // series - wheter the draft is for a series
-const figureOutFullTypes = async (draft, doc, series) => {
+const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
   if (draft.type === "book") {
     if (doc.categories().includes("Canon audio dramas")) {
       draft.type = "audio-drama";
@@ -524,29 +545,24 @@ const figureOutFullTypes = async (draft, doc, series) => {
     }
   }
   else if (draft.type === "tv" && (draft.series?.length || series)) {
-    if (tvTypes[draft.series])
-      draft.fullType = tvTypes[draft.series];
+    let seriesTitle = series ? draft.title : draft.series.find(e => seriesDrafts[e]?.type === "tv");
+    if (tvTypes[seriesTitle])
+      draft.fullType = tvTypes[seriesTitle];
     else {
-      let seriesDoc = series ? doc : await docFromTitle(draft.series);
-      if (!seriesDoc) {
-        log.error(`Tried to fetch series "${draft.series}" for tv item "${draft.title}" but it failed.`);
-      }
-      else {
-        // If problematic, change sentence(0) to paragraph(0)
-        if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
-          draft.fullType = "tv-micro-series";
-        else if (seriesDoc.categories().includes("Canon animated television series"))
-          draft.fullType = "tv-animated";
-        else if (seriesDoc.categories().includes("Canon live-action television series"))
-          draft.fullType = "tv-live-action";
-        else
-          log.error(`Tv series neither live action nor animated nor micro series. Series: "${draft.series}", categories: ${seriesDoc.categories()}`);
+      if (!series) // This should theoretically never happen
+        throw `NO SERIES TYPE FOR EPISODE!!! Episode ${draft.title} is part of a series, for which we don't have the full type. Series title: ${seriesTitle} (${draft.series})`;
+      let seriesDoc = doc;
+      // If problematic, change sentence(0) to paragraph(0)
+      if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
+        draft.fullType = "tv-micro-series";
+      else if (seriesDoc.categories().includes("Canon animated television series"))
+        draft.fullType = "tv-animated";
+      else if (seriesDoc.categories().includes("Canon live-action television series"))
+        draft.fullType = "tv-live-action";
+      else
+        log.error(`Tv series neither live action nor animated nor micro series. Series: "${seriesTitle}", categories: ${seriesDoc.categories()}`);
 
-        if (draft.series)
-          tvTypes[draft.series] = draft.fullType;
-        else if (series)
-          tvTypes[draft.title] = draft.fullType;
-      }
+      tvTypes[seriesTitle] = draft.fullType;
     }
   }
   else if (draft.type === "game") {
@@ -638,10 +654,11 @@ log.setStatusBarText([`Article: ${progress}/${outOf}`]);
 let pages = fetchWookiee(Object.keys(drafts), CACHE_PAGES);
 let infoboxes = [], seriesInfoboxes = [];
 
-// while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
-for await (let page of pages) {
-  if (page.missing) 
-    throw `Page missing! "${page.title}" is not a valid wookieepedia article.`;
+const docFromPage = async (page, drafts) => {
+  if (page.missing) {
+    // log.warn(`Page missing! "${page.title}" is not a valid wookieepedia article.`);
+    return [null, drafts[page.title]]; // what about title normalization? potential super rare super hard to track bug.
+  }
 
   if (page.normalizedFrom) {
     drafts[page.title] = drafts[page.normalizedFrom];
@@ -653,17 +670,28 @@ for await (let page of pages) {
     throw `Mismatch between timeline title and the title received from the server for: "${page.title}"`;
   }
   draft.title = page.title;
+  // In case of a redirect, the fields below describe the redirect page
   draft.wookieepediaId = page.pageid;
   draft.revisionTimestamp = page.timestamp;
 
-  ///////////////////////////////////
-  // Getting data from the article //
-  ///////////////////////////////////
   let doc = wtf(page.wikitext);
   while (doc.isRedirect()) {
     log.info(`Article ${draft.title} is a redirect to ${doc.redirectTo().page}. Fetching...`)
-    doc = wtf((await fetchWookiee(doc.redirectTo().page).next()).value.wikitext);
+    redirectNum++;
+    draft.redirect = true;
+    doc = await docFromTitle(doc.redirectTo().page);
+    if (doc === null)
+      throw `Not a valid wookieepedia article!`;
   }
+  return [doc, draft];
+}
+
+// while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
+for await (let page of pages) {
+  let [doc, draft] = await docFromPage(page, drafts);
+  if (doc === null)
+    throw `${page.title} is a redlink in the timeline!`; // TODO: handle?
+  draft.doc = doc; // We need this for the second iteration
   let infobox = doc.infobox();
   if (!infobox) {
     log.error(page.wikitext.slice(0, 1500));
@@ -678,66 +706,97 @@ for await (let page of pages) {
 
   fillDraftWithInfoboxData(draft, infobox);
 
-  figureOutFullTypes(draft, doc, false);
-
-  // Series handling
   if (draft.series) {
     for (let seriesTitle of draft.series) {
-      if (!(seriesTitle in seriesDrafts)) {
-        let seriesDoc = await docFromTitle(seriesTitle);
-        let seriesDraft = { title: seriesTitle };
-        if (seriesTitle.includes("#")) {
-          seriesDraft.displayTitle = seriesTitle.replaceAll("#", " ");
-        }
-        if (seriesDoc !== null) {
-          let seriesInfobox = seriesDoc.infobox();
-          let firstSentence = seriesDoc.sentence(0).text();
-          // Figure out type from categories ...
-          if (seriesDoc.categories().includes("Multimedia projects")) {
-            seriesDraft.type = "multimedia";
-          }
-          // ... or from the first sentence of the article
-          else {
-            for (let [type, re] of Object.entries(seriesRegexes)) {
-              if (re.test(firstSentence)) {
-                if (seriesDraft.type)
-                  log.warn(`Multiple regex matches in first sentence of series article when looking for type. Matched for: ${seriesDraft.type} and ${type}. Sentence: ${firstSentence}`);
-                seriesDraft.type = type;
-              }
-            }
-          }
-          if (seriesInfobox !== null) {
-            if (!seriesDraft.type) {
-              seriesDraft.type = seriesTypes[seriesInfobox._type];
-              if (seriesDraft.type === undefined)
-                throw `Series ${seriesTitle} has unknown infobox: ${seriesInfobox._type}! Can't infer type.`;
-              if (debug.distinctInfoboxes && seriesInfobox && !(seriesInfoboxes.includes(seriesInfobox._type))) {
-                seriesInfoboxes.push(seriesInfobox._type, "\n");
-              }
-            }
-            fillDraftWithInfoboxData(seriesDraft, seriesInfobox);
-            figureOutFullTypes(seriesDraft, seriesDoc, true);
-          }
-          else if(!seriesDraft.type) {
-            throw `No infobox and failed to infer series type from article!! series: ${seriesTitle} sentence: ${firstSentence}`;
-          }
-          seriesDrafts[seriesTitle] = seriesDraft;
-        }
-        else if (debug.redlinks) {
-          log.warn(`Series ${seriesTitle} is a redlink in article: ${draft.title}`);
-        }
-      }
+      if (!(seriesTitle in seriesDrafts))
+        seriesDrafts[seriesTitle] = { title: seriesTitle };
     }
   }
 
-  ///////////////////////////////////
-  ///////////////////////////////////
-  ///////////////////////////////////
-
-    log.setStatusBarText([`Article: ${++progress}/${outOf}`]);
+  log.setStatusBarText([`Article: ${++progress}/${outOf}`]);
 }
 
-log(`Article: ${progress}/${outOf}`);
+progress = 0;
+outOf = Object.keys(seriesDrafts).length;
+
+// Series handling
+let seriesPages = fetchWookiee(Object.keys(seriesDrafts), CACHE_PAGES);
+// for (let [seriesTitle, seriesDraft] of Object.entries(seriesDrafts)) {
+for await (let page of seriesPages) {
+  let [seriesDoc, seriesDraft] = await docFromPage(page, seriesDrafts);
+  if (seriesDoc === null) {
+    if (debug.redlinks) {
+      log.warn(`Series ${page.title} is a redlink!`);
+    }
+    // infer series type from episodes
+    log.info(`Inferring series type from episodes of a redlink series: ${page.title}`)
+    let episodes = Object.values(drafts).filter(e => e.series?.includes(page.title));
+    let epType;
+    if (episodes.every((e, index) => index === 0 ? epType = e.type : epType === e.type)) {
+      seriesDraft.type = epType;
+      log.info(`Inferred type: ${epType}`);
+      if (episodes.every((e, index) => index === 0 ? epType = e.fullType : epType === e.fullType)) {
+        seriesDraft.fullType = epType;
+        log.info(`Inferred full type: ${epType}`);
+      }
+    }
+    else {
+      seriesDraft.type = "unknown";
+      log.warn("Failed to infer type. Setting 'unknown'. Consider adding 'unkown' entry to the legend.");
+    }
+    progress++;
+    continue;
+  }
+  let seriesTitle = seriesDraft.title;
+  if (seriesTitle.includes("#")) {
+    seriesDraft.displayTitle = seriesTitle.replaceAll("#", " ");
+  }
+  let seriesInfobox = seriesDoc.infobox();
+  let firstSentence = seriesDoc.sentence(0).text();
+  // Figure out type from categories ...
+  if (seriesDoc.categories().includes("Multimedia projects")) {
+    seriesDraft.type = "multimedia";
+  }
+  // ... or from the first sentence of the article
+  else {
+    for (let [type, re] of Object.entries(seriesRegexes)) {
+      if (re.test(firstSentence)) {
+        if (seriesDraft.type)
+          log.warn(`Multiple regex matches in first sentence of series article when looking for type. Matched for: ${seriesDraft.type} and ${type}. Sentence: ${firstSentence}`);
+        seriesDraft.type = type;
+      }
+    }
+  }
+  if (seriesInfobox !== null) {
+    if (!seriesDraft.type) {
+      seriesDraft.type = seriesTypes[seriesInfobox._type];
+      if (seriesDraft.type === undefined)
+        throw `Series ${seriesTitle} has unknown infobox: ${seriesInfobox._type}! Can't infer type.`;
+      if (debug.distinctInfoboxes && seriesInfobox && !(seriesInfoboxes.includes(seriesInfobox._type))) {
+        seriesInfoboxes.push(seriesInfobox._type, "\n");
+      }
+    }
+    fillDraftWithInfoboxData(seriesDraft, seriesInfobox);
+    figureOutFullTypes(seriesDraft, seriesDoc, true);
+  }
+  else if(!seriesDraft.type) {
+    throw `No infobox and failed to infer series type from article!! series: ${seriesTitle} sentence: ${firstSentence}`;
+  }
+  log.setStatusBarText([`Series article: ${++progress}/${outOf}`]);
+}
+
+progress = 0;
+outOf = Object.keys(drafts).length;
+log.setStatusBarText([`Second iteration (full types). Article: ${progress}/${outOf}`]);
+
+// Second iteration over media to get full types, for which we need series data.
+// Second iteration because we want to batch series fetching.
+for (let draft of Object.values(drafts)) {
+  figureOutFullTypes(draft, draft.doc, false, seriesDrafts);
+  delete draft.doc;
+}
+
+// log(`Article: ${progress}/${outOf}`);
 
 // Setup DB
 const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
@@ -777,9 +836,9 @@ for (let v of Object.values(drafts)) {
 let covers = Object.values(drafts).filter(o => o.coverWook).map(draft => "File:" + draft.coverWook);
 
 log.info("Fetching imageinfo...");
-log.setStatusBarText([`Image: ${progress}/${outOf}`]);
 progress = 0;
 outOf = covers.length;
+log.setStatusBarText([`Image: ${progress}/${outOf}`]);
 
 let imageinfos = fetchImageInfo(covers);
 
@@ -838,6 +897,7 @@ for await (let imageinfo of imageinfos) {
     }
     else if (!exists.FULL) {
       let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } });
+      requestNum++;
       if (!resp.ok) {
         throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
       }
@@ -848,7 +908,9 @@ for await (let imageinfo of imageinfos) {
       else {
         log.warn(`Image in non webp. article: ${articleTitle}, filename: ${myFilename}`);
       }
-      log.info(`Recieved ${toHumanReadable((await resp.clone().blob()).size)} of image "${imageinfo.title}"`);
+      let respSize = (await resp.clone().blob()).size;
+      imageBytesRecieved += respSize;
+      log.info(`Recieved ${toHumanReadable(respSize)} of image "${imageinfo.title}"`);
       buffer = await resp.buffer();
     }
     else {
@@ -913,4 +975,9 @@ if (debug.distinctInfoboxes) {
   await fs.writeFile("infoboxes.txt", infoboxes);
   await fs.writeFile("seriesInfoboxes.txt", seriesInfoboxes);
 }
-log.info("Done!");
+log.info(`Done!
+Number of redirects encountered: ${redirectNum}
+Total API data recieved: ${toHumanReadable(bytesRecieved)}
+Total image data recieved: ${toHumanReadable(imageBytesRecieved)}
+Number of HTTP requests made: ${requestNum}`);
+
