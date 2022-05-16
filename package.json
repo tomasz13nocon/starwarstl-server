@@ -14,6 +14,7 @@
     "cors": "^2.8.5",
     "express": "^4.17.2",
     "html-entities": "^2.3.2",
+    "image-size": "^1.0.1",
     "lodash": "^4.17.21",
     "log-with-statusbar": "^1.2.0",
     "md5": "^2.3.0",

@@ -1,6 +1,16 @@
 import * as fs from "fs/promises";
 import sharp from "sharp";
 // import fetch from "node-fetch";
+import { MongoClient } from  "mongodb";
+import { decode } from "html-entities";
+
+console.log(decode("https://qwe.com/lol#xd"));
+
+// const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
+// await client.connect();
+// let db = client.db("swtimeline");
+// await db.collection("series").updateOne({title: "Droid Tales"}, {$set: {type: "yr"}});
+// await client.close();
 
 // let resp = await fetch(`https://static.wikia.nocookie.net/starwars/images/5/5a/Epguide05.jpg/revision/latest?cb=20211005104816`);
 // let buffer = await resp.buffer();

@@ -2,6 +2,7 @@ import wtf from "wtf_wikipedia";
 import _ from "lodash";
 import * as fs from "fs/promises";
 import sharp from "sharp";
+import sizeOf from "image-size";
 import { decode } from "html-entities";
 import { MongoClient } from  "mongodb";
 import logWithStatusbar from "log-with-statusbar";
@@ -19,6 +20,7 @@ const debug = {
   redlinks: false,
 };
 
+const CACHE_PAGES = true;
 const IMAGE_PATH = "../client/public/images/";
 const NUMBERS = {
   'one': 1,
@@ -44,13 +46,23 @@ const NUMBERS = {
 };
 const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
 const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
-const seriesTypes = {
+const seriesTypes = { // TODO full types
   "book series": "book",
   "comic series": "comic",
   "movie": "film",
   "television series": "tv",
   "comic story arc": "comic",
+  "magazine": "comic",
 };
+// Latter ones have higher priority, as they overwrite
+const seriesRegexes = {
+  "multimedia": /multimedia project/i,
+  "comic": /((comic([ -]book)?|manga|graphic novel) (mini-?)?series|series of( young readers?)? (comic([ -]book)?s|mangas|graphic novels))/i, // TODO subtypes/full types
+  "short-story": /short stor(y|ies)/i,
+  "game": /video game/i,
+  // "yr": /((series of books|book series).*?young children|young[- ]reader.*?(book series|series of books))/i,
+};
+let tvTypes = {};
 
 (() => {
   wtf.extend((models, templates) => {
@@ -125,7 +137,7 @@ const toHumanReadable = (n) => {
 }
 
 // Code extracted to use in fetchWookiee and fetchImageInfo
-const fetchWookieeHelper = async function* (titles, apiParams = {}) {
+const fetchWookieeHelper = async function* (titles, apiParams = {}, cache = true) {
   if (typeof titles === "string") titles = [titles];
   // Fandom allows up to 50 titles per request
   for (let i = 0; i < titles.length; i+=50) {
@@ -138,12 +150,18 @@ maxlag=1&\
 maxage=604800&\
 titles=${encodeURIComponent(titlesStr)}\
 ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${value}`, "")}`;
-    const resp = await fetchCache(apiUrl); // TODO switch to normal fetch
+    const resp = cache ? await fetchCache(apiUrl) : await fetch(apiUrl); // TODO switch to normal fetch
     if (!resp.ok) {
       throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
     }
     log.info(`Recieved ${toHumanReadable((await resp.clone().blob()).size)} of ${apiParams.prop}`);
     const json = await resp.json();
+    if (json.query === undefined) {
+      log.error(apiUrl);
+      log.error(json);
+      log.error(resp);
+      throw "Response Invalid";
+    }
     let pages = Object.values(json.query.pages);
     // If there's random symbols or underscores in the title it gets normalized,
     // so we make the normalized version part of the return value
@@ -163,10 +181,10 @@ ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${valu
 }
 
 // yields objects containing title, pageid and wikitext
-// number of yields will be the same as the amount of valid titles provided (ones that have an article on Wookieepedia)
+// number of yields will be the same as the amount of titles provided
 // titles needs to be a string (single title) or a non empty array of strings
-const fetchWookiee = async function* (titles) {
-  for await (let page of fetchWookieeHelper(titles, { prop: "revisions", rvprop: "content|timestamp", rvslots: "main" })) {
+const fetchWookiee = async function* (titles, cache = true) {
+  for await (let page of fetchWookieeHelper(titles, { prop: "revisions", rvprop: "content|timestamp", rvslots: "main" }, cache)) {
     if (page.missing !== undefined) {
       yield {
         title: page.title,
@@ -214,7 +232,7 @@ const docFromTitle = async (title) => {
   return wtf(page.wikitext);
 }
 
-// Returns a promise resolving to a target audience string from wtf doc
+// Returns a promise resolving to a target audience string from wtf doc or null if it can't figure it out
 const getAudience = async (doc) => {
   // We can't rely on books.disney.com even though it's the most official source,
   // because a lot of books are aribitrarily not there
@@ -222,7 +240,7 @@ const getAudience = async (doc) => {
   let categories = doc.categories();
   if (categories.includes("Canon adult novels")) return "a";
   if (categories.includes("Canon young-adult novels")) return "ya";
-  if (categories.includes("Canon Young Readers")) return "yr";
+  if (categories.includes("Canon Young Readers")) return "jr";
   let sentence = doc.sentence(0).text();
   //let mediaType = doc.infobox().get("media type").text();
   const reg = (str) => {
@@ -238,13 +256,14 @@ const getAudience = async (doc) => {
   if (regSentence) return regSentence;
   let seriesTitle;
   try {
-    seriesTitle = doc.infobox().get("series").links()[0].json().page;
+    seriesTitle = doc.infobox().get("series").links()[0].json().page; // TODO: ??????
   } catch (e) {
     log.warn(
       `Couldn't get a 'series' from infobox. title: ${doc.title()}, series: ${seriesTitle}, error: `,
       e.name + ":",
       e.message
     );
+    log.error(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}`);
     return null;
   }
   log.info(`Getting series: ${seriesTitle} for ${doc.title()}`);
@@ -252,7 +271,10 @@ const getAudience = async (doc) => {
   log.info(`title: ${seriesDoc.title()} (fetched: ${seriesTitle})`);
   log.info(`sentence: ${seriesDoc.sentence(0)}, text: ${seriesDoc.sentence(0).text()}`);
   let seriesSentence = seriesDoc.sentence(0).text();
-  return reg(seriesSentence);
+  let regSeries = reg(seriesSentence);
+  if (!regSeries)
+    log.error(`Can't figure out target audience for ${doc.title()} from sentence: ${sentence}\n nor its series' sentence: ${seriesSentence}`);
+  return regSeries;
 };
 
 // Takes a text node, returns an array of text and note nodes. Also removes italics/bold... (I really need a new parser...)
@@ -381,6 +403,10 @@ const processAst = (sentence) => {
     : newAst;
 };
 
+const getPageWithAnchor = link => {
+  return link.page() + (link.anchor() ? "#" + link.anchor() : "");
+}
+
 const fillDraftWithInfoboxData = (draft, infobox) => {
   for (const [key, value] of Object.entries(
     getInfoboxData(infobox, [
@@ -445,14 +471,19 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
     draft[key] = processAst(value);
   }
 
-  draft.coverWook = infobox.get("image").text().match(/\[\[(File:.*)\]\]/)?.[1];
+  // draft.coverWook = infobox.get("image").wikitext().match(/\[\[(.*)\]\]/)?.[1];
+  draft.coverWook = infobox.get("image").wikitext().replaceAll(/(\[\[|File:|\]\]|\|.*)/g, "");
+  
+  // if (draft.coverWook === undefined && infobox.get("image").text() !== "") {
+  //   log.error(`Unexpected cover filename format! title: "${draft.title}", cover field in infobox: "${infobox.get("image").wikitext()}"`);
+  // }
 
   // no comment...
   if (draft.isbn === "none")
     delete draft.isbn;
 
   draft.publisher = infobox.get("publisher").links()?.map(e => decode(e.page())) || null;
-  draft.series = infobox.get("series").links()?.map(e => decode(e.page())) || null;
+  draft.series = infobox.get("series").links()?.map(e => decode(getPageWithAnchor(e))) || null;
   let seasonText = infobox.get("season").text();
   if (seasonText) {
     let seasonTextClean = seasonText.toLowerCase().trim();
@@ -477,10 +508,63 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
   }
 };
 
+// series - wheter the draft is for a series
+const figureOutFullTypes = async (draft, doc, series) => {
+  if (draft.type === "book") {
+    if (doc.categories().includes("Canon audio dramas")) {
+      draft.type = "audio-drama";
+      draft.audiobook = false;
+    }
+    else {
+      if (!draft.fullType) {
+        let audience = await getAudience(doc);
+        if (audience)
+          draft.fullType = `book-${audience}`;
+      }
+    }
+  }
+  else if (draft.type === "tv" && (draft.series?.length || series)) {
+    if (tvTypes[draft.series])
+      draft.fullType = tvTypes[draft.series];
+    else {
+      let seriesDoc = series ? doc : await docFromTitle(draft.series);
+      if (!seriesDoc) {
+        log.error(`Tried to fetch series "${draft.series}" for tv item "${draft.title}" but it failed.`);
+      }
+      else {
+        // If problematic, change sentence(0) to paragraph(0)
+        if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
+          draft.fullType = "tv-micro-series";
+        else if (seriesDoc.categories().includes("Canon animated television series"))
+          draft.fullType = "tv-animated";
+        else if (seriesDoc.categories().includes("Canon live-action television series"))
+          draft.fullType = "tv-live-action";
+        else
+          log.error(`Tv series neither live action nor animated nor micro series. Series: "${draft.series}", categories: ${seriesDoc.categories()}`);
+
+        if (draft.series)
+          tvTypes[draft.series] = draft.fullType;
+        else if (series)
+          tvTypes[draft.title] = draft.fullType;
+      }
+    }
+  }
+  else if (draft.type === "game") {
+    if (doc.categories().includes("Canon mobile games"))
+      draft.fullType = "game-mobile";
+    else if (doc.categories().includes("Web-based games"))
+      draft.fullType = "game-browser";
+    else if (doc.categories().includes("Virtual reality") || doc.categories().includes("Virtual reality attractions") || doc.categories().includes("Virtual reality games") || /virtual[ -]reality/i.test(doc.sentence(0).text()))
+      draft.fullType = "game-vr";
+    else
+      draft.fullType = "game";
+  }
+}
+
 log.info("Fetching timeline...");
 //let timelineDoc = wtf(timelineString);
 // let timelineDoc = wtf(await fs.readFile("../client/sample_wikitext/timeline", "utf-8"));
-let timelineDoc = wtf((await fetchWookiee("Timeline of canon media").next()).value.wikitext);
+let timelineDoc = wtf((await fetchWookiee("Timeline of canon media", CACHE_PAGES).next()).value.wikitext);
 //let timelineDoc = await fetchWookiee("Timeline_of_Legends_media");
 let data = timelineDoc.tables()[1].json();
 // data = data.slice(0,50);
@@ -488,7 +572,7 @@ let data = timelineDoc.tables()[1].json();
 const types = {
   C: "comic",
   N: "book",
-  SS: "short story",
+  SS: "short-story",
   YR: "yr",
   JR: "book",
   TV: "tv",
@@ -500,7 +584,6 @@ const types = {
 let drafts = {};
 let nopageDrafts = [];
 let seriesDrafts = {};
-let tvTypes = {};
 
 log.info("Processing timeline...");
 for (let [i, item] of data.entries()) {
@@ -514,15 +597,26 @@ for (let [i, item] of data.entries()) {
     chronology: i,
   };
   if (item.col2.text === "JR")
-    draft.audience = "jr";
+    draft.fullType = "book-jr";
   if (draft.type === undefined) {
     if (item.col2.text !== "P")
       log.warn("Timeline parsing warning: Unknown type, skipping. type: " + item.col2.text);
     continue;
   }
+  let notes = item.Title.text.split("*");
+  if (notes.length > 1) {
+    draft.timelineNotes = [{ type: "list", data: notes.slice(1).map(s => ([{ type: "text", text: s.trim() }])) }]; // TODO:parser get links and such, not just text
+    for (let s of draft.timelineNotes[0].data) {
+      if (s[0].text.toLowerCase().includes("adaptation"))
+        draft.adaptation = true;
+    };
+  }
+  if (item.Title.text.includes("†"))
+    draft.exactPlacementUnknown = true;
+
   // TODO: uncomment? "2022-??-??" is NaN tho..
   // if (isNaN(new Date(draft.releaseDate)))
-    // delete draft.releaseDate;
+  // delete draft.releaseDate;
 
   // This usually happens for some yet to be release media like tv episodes
   if (!draft.title) {
@@ -541,7 +635,7 @@ let progress = 0;
 let outOf = Object.keys(drafts).length;
 log.setStatusBarText([`Article: ${progress}/${outOf}`]);
 
-let pages = fetchWookiee(Object.keys(drafts));
+let pages = fetchWookiee(Object.keys(drafts), CACHE_PAGES);
 let infoboxes = [], seriesInfoboxes = [];
 
 // while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
@@ -566,138 +660,66 @@ for await (let page of pages) {
   // Getting data from the article //
   ///////////////////////////////////
   let doc = wtf(page.wikitext);
+  while (doc.isRedirect()) {
+    log.info(`Article ${draft.title} is a redirect to ${doc.redirectTo().page}. Fetching...`)
+    doc = wtf((await fetchWookiee(doc.redirectTo().page).next()).value.wikitext);
+  }
   let infobox = doc.infobox();
   if (!infobox) {
+    log.error(page.wikitext.slice(0, 1500));
     throw `No infobox! title: ${draft.title}`;
   }
 
   if (debug.distinctInfoboxes && !infoboxes.includes(infobox._type))
     infoboxes.push(infobox._type, "\n")
-  let type, subtype;
-  // It hurts the eyes a little to see capitalized and non capitalized values next to each other but the reason for this is the filter structure explained in home.js `createState` function.
-  switch (infobox._type) {
-    case "book":
-      type = "book";
-      break;
-    case "book series":
-      type = "book";
-      subtype = "Series";
-      break;
-    case "audiobook":
-      type = "audiobook";
-      break;
-    case "comic book":
-    case "comic strip":
-    case "webstrip":
-    case "comic story":
-      type = "comic";
-      subtype = "Single issue";
-      break;
-    case "comic story arc":
-      type = "comic";
-      subtype = "Story arc";
-      break;
-    case "comic series":
-      type = "comic";
-      subtype = "Series";
-      break;
-    case "trade paperback":
-      type = "comic";
-      subtype = "Trade paperback";
-      break;
-    case "short story":
-      type = "short story";
-      break;
-    case "reference book":
-      type = "reference book";
-      break;
-    case "video game":
-      type = "video game";
-      break;
-    case "movie":
-      type = "movie";
-      break;
-    case "television series":
-      type = "tv";
-      subtype = "series";
-      break;
-    case "television season":
-      type = "tv";
-      subtype = "season";
-      break;
-    case "television episode":
-      type = "tv";
-      subtype = "episode";
-      break;
-      //case "media":
-  }
+
+  if (infobox._type ==="audiobook")
+    draft.audiobook === true;
 
   fillDraftWithInfoboxData(draft, infobox);
 
-  // Full types
-  if (draft.type === "book") {
-    if (doc.categories().includes("Canon audio dramas"))
-      draft.type = "audio drama";
-    else {
-      if (!draft.audience)
-        draft.audience = await getAudience(doc);
-      draft.fullType = `book-${draft.audience}`;
-      if (type === "audiobook")
-        draft.audiobook = true;
-    }
-  }
-  else if (draft.type === "tv" && draft.series?.length) {
-    if (tvTypes[draft.series])
-      draft.fullType = tvTypes[draft.series];
-    else {
-      let seriesDoc = await docFromTitle(draft.series);
-      if (!seriesDoc) {
-        log.error(`Tried to fetch series "${draft.series}" for tv item "${draft.title}" but it failed.`);
-      }
-      else {
-        // If problematic, change sentence(0) to paragraph(0)
-        if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
-          draft.fullType = "tv-micro-series";
-        else if (seriesDoc.categories().includes("Canon animated television series"))
-          draft.fullType = "tv-animated";
-        else if (seriesDoc.categories().includes("Canon live-action television series"))
-          draft.fullType = "tv-live-action";
-        else
-          log.error(`Tv series neither live action nor animated nor micro series. Series: "${draft.series}", categories: ${seriesDoc.categories()}`);
-        tvTypes[draft.series] = draft.fullType;
-      }
-    }
-  }
-  else if (draft.type === "game") {
-    if (doc.categories().includes("Canon mobile games"))
-      draft.fullType = "game-mobile";
-    else if (doc.categories().includes("Web-based games"))
-      draft.fullType = "game-browser";
-    else if (doc.categories().includes("Virtual reality") || doc.categories().includes("Virtual reality attractions") || doc.categories().includes("Virtual reality games") || /virtual[ -]reality/i.test(doc.sentence(0).text()))
-      draft.fullType = "game-vr";
-    else
-      draft.fullType = "game";
-  }
+  figureOutFullTypes(draft, doc, false);
 
   // Series handling
   if (draft.series) {
     for (let seriesTitle of draft.series) {
       if (!(seriesTitle in seriesDrafts)) {
         let seriesDoc = await docFromTitle(seriesTitle);
-        let seriesDraft = { title: seriesTitle }; // TODO writer, type
+        let seriesDraft = { title: seriesTitle };
+        if (seriesTitle.includes("#")) {
+          seriesDraft.displayTitle = seriesTitle.replaceAll("#", " ");
+        }
         if (seriesDoc !== null) {
           let seriesInfobox = seriesDoc.infobox();
+          let firstSentence = seriesDoc.sentence(0).text();
+          // Figure out type from categories ...
+          if (seriesDoc.categories().includes("Multimedia projects")) {
+            seriesDraft.type = "multimedia";
+          }
+          // ... or from the first sentence of the article
+          else {
+            for (let [type, re] of Object.entries(seriesRegexes)) {
+              if (re.test(firstSentence)) {
+                if (seriesDraft.type)
+                  log.warn(`Multiple regex matches in first sentence of series article when looking for type. Matched for: ${seriesDraft.type} and ${type}. Sentence: ${firstSentence}`);
+                seriesDraft.type = type;
+              }
+            }
+          }
           if (seriesInfobox !== null) {
-            seriesDraft.type = seriesTypes[seriesInfobox._type];
-            if (seriesDraft.type === undefined)
-              throw `Series ${seriesTitle} has unknown infobox! Can't infer type.`;
-            if (debug.distinctInfoboxes && seriesInfobox && !(seriesInfoboxes.includes(seriesInfobox._type))) {
-              seriesInfoboxes.push(seriesInfobox._type, "\n");
+            if (!seriesDraft.type) {
+              seriesDraft.type = seriesTypes[seriesInfobox._type];
+              if (seriesDraft.type === undefined)
+                throw `Series ${seriesTitle} has unknown infobox: ${seriesInfobox._type}! Can't infer type.`;
+              if (debug.distinctInfoboxes && seriesInfobox && !(seriesInfoboxes.includes(seriesInfobox._type))) {
+                seriesInfoboxes.push(seriesInfobox._type, "\n");
+              }
             }
             fillDraftWithInfoboxData(seriesDraft, seriesInfobox);
+            figureOutFullTypes(seriesDraft, seriesDoc, true);
           }
-          else {
-            log.warn(`No infobox for series! title: ${draft.title}, series: ${seriesTitle}`);
+          else if(!seriesDraft.type) {
+            throw `No infobox and failed to infer series type from article!! series: ${seriesTitle} sentence: ${firstSentence}`;
           }
           seriesDrafts[seriesTitle] = seriesDraft;
         }
@@ -712,16 +734,31 @@ for await (let page of pages) {
   ///////////////////////////////////
   ///////////////////////////////////
 
-  log.setStatusBarText([`Article: ${++progress}/${outOf}`]);
+    log.setStatusBarText([`Article: ${++progress}/${outOf}`]);
 }
 
 log(`Article: ${progress}/${outOf}`);
 
-///// COVERS /////
+// Setup DB
 const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
 await client.connect();
 let db = client.db("swtimeline");
 let media = db.collection("media");
+let series = db.collection("series");
+
+// Problem: Junior series are referred to as "young reader" by wookieepedia, so we have to infer yr type by looking at entries of the series
+// If all entries of a book series are yr then the series is yr
+let bookSeriesArr = Object.values(seriesDrafts).filter(e => e.type === "book").map(e => e.title);
+for (let bookSeries of bookSeriesArr) {
+  let entries = Object.values(drafts).filter(e => e.series?.includes(bookSeries));
+  if (entries.every(e => e.type === "yr")) {
+    seriesDrafts[bookSeries].type = "yr";
+    delete seriesDrafts[bookSeries].fullType;
+    log.info(`Series ${bookSeries} has only yr entries, therefore it is yr.`);
+  }
+}
+
+///// COVERS /////
 
 // TODO use a title index once I set it up
 let docs = await media.find({}, {projection:{title: 1, cover: 1, coverTimestamp: 1}}).toArray();
@@ -737,7 +774,7 @@ for (let v of Object.values(drafts)) {
   titlesDict[v.coverWook] = v.title;
 }
 
-let covers = Object.values(drafts).map(draft => draft.coverWook).filter(s => s); // filter out entires with no covers
+let covers = Object.values(drafts).filter(o => o.coverWook).map(draft => "File:" + draft.coverWook);
 
 log.info("Fetching imageinfo...");
 log.setStatusBarText([`Image: ${progress}/${outOf}`]);
@@ -775,7 +812,7 @@ const anyMissing = async (exists, filename) => {
 
 for await (let imageinfo of imageinfos) {
   // Keep in mind imageinfo.title is a filename of the image, not the article title
-  let articleTitle = titlesDict[imageinfo.normalizedFrom ?? imageinfo.title];
+  let articleTitle = titlesDict[(imageinfo.normalizedFrom ?? imageinfo.title).slice(5)];
   let current = currentCovers[articleTitle];
   let exists = {};
 
@@ -785,20 +822,21 @@ for await (let imageinfo of imageinfos) {
     current.coverTimestamp < imageinfo.timestamp || // cover got updated
     await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing) TODO remove?
   ) {
-    if (!imageinfo.title.startsWith("File:")) // Just to make sure. Should never happen. TODO remove
-      log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
+    // if (!imageinfo.title.startsWith("File:")) {
+    //   log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
+    // }
     // remove leading "File:"
     let myFilename = imageinfo.title.slice(5);
     let buffer;
 
     // code to pick up from incomplete fetches
-    /*let pos = myFilename.lastIndexOf(".");
+    let pos = myFilename.lastIndexOf(".");
     myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
-// We got the cover but it's not in the db (due to previous incomplete fetch)
+    // We got the cover but it's not in the db (due to previous incomplete fetch)
     if (!current && !(await anyMissing(exists, myFilename))) {
       buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
-    else*/ if (!exists.FULL) {
+    else if (!exists.FULL) {
       let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } });
       if (!resp.ok) {
         throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
@@ -824,6 +862,9 @@ for await (let imageinfo of imageinfos) {
     if (!exists.SMALL) await sharp(buffer).webp({ nearLossless: true }).resize(220).toFile(`${IMAGE_PATH}${Size.SMALL}${myFilename}`);
     if (!exists.THUMB) await sharp(buffer).webp({ nearLossless: true }).resize(55).toFile(`${IMAGE_PATH}${Size.THUMB}${myFilename}`);
     drafts[articleTitle].cover = myFilename;
+    const dimensions = sizeOf(buffer);
+    drafts[articleTitle].coverWidth = dimensions.width;
+    drafts[articleTitle].coverHeight = dimensions.height;
     drafts[articleTitle].coverTimestamp = imageinfo.timestamp;
     drafts[articleTitle].coverSha1 = imageinfo.sha1;
 
@@ -841,13 +882,14 @@ for await (let imageinfo of imageinfos) {
   else {
     // log.info(`Up to date cover exists for ${articleTitle}`);
     drafts[articleTitle].cover = current.cover;
+    drafts[articleTitle].coverWidth = current.coverWidth;
+    drafts[articleTitle].coverHeight = current.coverHeight;
     drafts[articleTitle].coverTimestamp = current.coverTimestamp;
     drafts[articleTitle].coverSha1 = current.coverSha1;
   }
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 } 
 
-let series = db.collection("series");
 log.info("Clearing DB...");
 media.deleteMany({});
 series.deleteMany({});
