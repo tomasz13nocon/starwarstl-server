@@ -18,7 +18,8 @@ const debug = {
   badWikitext: false, // not implemented
   // Warn on redlinks
   redlinks: false,
-  normalizations: false,
+  normalizations: true,
+  normalizationsImages: false,
 };
 
 const CACHE_PAGES = true;
@@ -175,8 +176,14 @@ ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${valu
     // so we make the normalized version part of the return value
     let normalizations = {};
     if (json.query.normalized) {
-      if (debug.normalizations)
+      if (apiParams.prop === "imageinfo") {
+        if (debug.normalizationsImages) {
+          log.info("Normalized: ", json.query.normalized);
+        }
+      }
+      else if (debug.normalizations) {
         log.info("Normalized: ", json.query.normalized);
+      }
       // log.info("Normalized ", json.query.normalized.length, " items");
       for (let normalization of json.query.normalized) {
         normalizations[normalization.to] = normalization.from;
@@ -661,8 +668,12 @@ const docFromPage = async (page, drafts) => {
   }
 
   if (page.normalizedFrom) {
+    if (page.normalizedFrom.includes("#")) {
+      page.title += page.normalizedFrom.slice(page.normalizedFrom.indexOf("#")).replace("_", " ");
+    }
     drafts[page.title] = drafts[page.normalizedFrom];
-    delete drafts[page.normalizedFrom];
+    if (page.title !== page.normalizedFrom)
+      delete drafts[page.normalizedFrom];
   }
   let draft = drafts[page.title];
   // This should never happen with all the checks before
@@ -726,11 +737,11 @@ for await (let page of seriesPages) {
   let [seriesDoc, seriesDraft] = await docFromPage(page, seriesDrafts);
   if (seriesDoc === null) {
     if (debug.redlinks) {
-      log.warn(`Series ${page.title} is a redlink!`);
+      log.warn(`Series ${seriesDraft.title} is a redlink!`);
     }
     // infer series type from episodes
-    log.info(`Inferring series type from episodes of a redlink series: ${page.title}`)
-    let episodes = Object.values(drafts).filter(e => e.series?.includes(page.title));
+    log.info(`Inferring series type from episodes of a redlink series: ${seriesDraft.title}`)
+    let episodes = Object.values(drafts).filter(e => e.series?.includes(seriesDraft.title));
     let epType;
     if (episodes.every((e, index) => index === 0 ? epType = e.type : epType === e.type)) {
       seriesDraft.type = epType;
@@ -762,7 +773,7 @@ for await (let page of seriesPages) {
     for (let [type, re] of Object.entries(seriesRegexes)) {
       if (re.test(firstSentence)) {
         if (seriesDraft.type)
-          log.warn(`Multiple regex matches in first sentence of series article when looking for type. Matched for: ${seriesDraft.type} and ${type}. Sentence: ${firstSentence}`);
+          log.info(`Multiple regex matches in first sentence of series article: ${seriesTitle} when looking for type. Matched for: ${seriesDraft.type} and ${type} (latter takes priority). Sentence: ${firstSentence}`);
         seriesDraft.type = type;
       }
     }
