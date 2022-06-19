@@ -22,6 +22,19 @@ const debug = {
   normalizationsImages: false,
 };
 
+// Suppress specific warnings for specific titles after manually confirming they're not an issue
+const suppressLog = {
+  lowConfidenceManga: ["The Banchiians"],
+  lowConfidenceAdultNovel: ["Star Wars: The Aftermath Trilogy"],
+  multipleRegexMatches: [
+    "Star Wars: The High Republic (Marvel Comics 2021)",
+    "Star Wars: The High Republic Adventures",
+    "Star Wars: The High Republic: The Edge of Balance",
+    "Star Wars: The High Republic: Trail of Shadows",
+    "Star Wars: The High Republic: Eye of the Storm",
+  ],
+};
+
 const CACHE_PAGES = true;
 const IMAGE_PATH = "../client/public/images/";
 const NUMBERS = {
@@ -261,7 +274,8 @@ const reg = (str, title) => {
   if (ya.test(str)) return "ya";
   if (a.test(str)) return "a";
   if (aLow.test(str)) {
-    log.warn(`Low confidence guess of adult novel type for ${title} from sentence: ${str}`);
+    if (!suppressLog.lowConfidenceAdultNovel.includes(title))
+      log.warn(`Low confidence guess of adult novel type for ${title} from sentence: ${str}`);
     return "a";
   }
   return null;
@@ -551,13 +565,13 @@ const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
       }
     }
   }
-  else if (draft.type === "tv" && (draft.series?.length || series)) {
-    let seriesTitle = series ? draft.title : draft.series.find(e => seriesDrafts[e]?.type === "tv");
+  else if (draft.type === "tv"/* && (draft.series?.length || series)*/) {
+    let seriesTitle = !draft.series ? draft.title : draft.series.find(e => seriesDrafts[e]?.type === "tv");
     if (tvTypes[seriesTitle])
       draft.fullType = tvTypes[seriesTitle];
     else {
-      if (!series) // This should theoretically never happen
-        throw `NO SERIES TYPE FOR EPISODE!!! Episode ${draft.title} is part of a series, for which we don't have the full type. Series title: ${seriesTitle} (${draft.series})`;
+      // if (!series) // This should theoretically never happen
+      //   throw `NO SERIES TYPE FOR EPISODE!!! Episode ${draft.title} is part of a series, for which we don't have the full type. Series title: ${seriesTitle} (${draft.series})`;
       let seriesDoc = doc;
       // If problematic, change sentence(0) to paragraph(0)
       if (/micro[- ]series/i.test(seriesDoc.sentence(0).text()))
@@ -566,8 +580,17 @@ const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
         draft.fullType = "tv-animated";
       else if (seriesDoc.categories().includes("Canon live-action television series"))
         draft.fullType = "tv-live-action";
-      else
-        log.error(`Tv series neither live action nor animated nor micro series. Series: "${seriesTitle}", categories: ${seriesDoc.categories()}`);
+      else {
+        log.warn(`Unknown TV full type. Series: "${seriesTitle}", categories: ${seriesDoc.categories()}`);
+        if (/animated/i.test(seriesDoc.sentence(0).text()) || /\bCG\b|\bCGI\b/.test(seriesDoc.sentence(0).text())) {
+          draft.fullType = "tv-animated";
+          log.warn(`Inferring animated type from sentence: ${seriesDoc.sentence(0).text()}`);
+        }
+        else {
+          draft.fullType = "tv-live-action";
+          log.warn(`Couldn't infer type from sentence. Setting to live-action.`);
+        }
+      }
 
       tvTypes[seriesTitle] = draft.fullType;
     }
@@ -581,6 +604,21 @@ const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
       draft.fullType = "game-vr";
     else
       draft.fullType = "game";
+  }
+  else if (draft.type === "comic") {
+    if (/manga|japanese webcomic/i.test(doc.sentence(0).text()) || doc.categories().includes("Canon manga"))
+      draft.fullType = "comic-manga";
+    else if (/manga|japanese webcomic/i.test(doc.sentence(1)?.text())) {
+      draft.fullType = "comic-manga";
+      if (!suppressLog.lowConfidenceManga.includes(draft.title))
+        log.warn(`Low confidence guess of manga type for ${draft.title} from sentences: ${doc.sentence(0).text() + doc.sentence(1).text()}`);
+    }
+    else if (doc.infobox()._type === "comic strip")
+      draft.fullType = "comic-strip";
+    else if (doc.infobox()._type === "comic story")
+      draft.fullType = "comic-story";
+    else
+      draft.fullType = "comic";
   }
 }
 
@@ -772,8 +810,10 @@ for await (let page of seriesPages) {
   else {
     for (let [type, re] of Object.entries(seriesRegexes)) {
       if (re.test(firstSentence)) {
-        if (seriesDraft.type)
-          log.info(`Multiple regex matches in first sentence of series article: ${seriesTitle} when looking for type. Matched for: ${seriesDraft.type} and ${type} (latter takes priority). Sentence: ${firstSentence}`);
+        if (seriesDraft.type) {
+          if (!suppressLog.multipleRegexMatches.includes(seriesTitle))
+            log.warn(`Multiple regex matches in first sentence of series article: ${seriesTitle} when looking for type. Matched for: ${seriesDraft.type} and ${type} (latter takes priority). Sentence: ${firstSentence}`);
+        }
         seriesDraft.type = type;
       }
     }
@@ -962,6 +1002,10 @@ for await (let imageinfo of imageinfos) {
   }
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 } 
+
+let noFullTypes = Object.values(drafts).filter(e => ["tv","book","comic","game"].includes(e.type) && e.fullType === undefined).map(e => e.title);
+if (noFullTypes.length)
+  log.error(`No fullType despite being required (for frontend filters) on the following media:\n${noFullTypes.join("\n")}`);
 
 log.info("Clearing DB...");
 media.deleteMany({});
