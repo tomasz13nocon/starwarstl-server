@@ -628,7 +628,7 @@ log.info("Fetching timeline...");
 let timelineDoc = wtf((await fetchWookiee("Timeline of canon media", CACHE_PAGES).next()).value.wikitext);
 //let timelineDoc = await fetchWookiee("Timeline_of_Legends_media");
 let data = timelineDoc.tables()[1].json();
-// data = data.slice(0,50);
+data = data.slice(0,850);
 
 const types = {
   C: "comic",
@@ -652,7 +652,7 @@ for (let [i, item] of data.entries()) {
   let draft = {
     title: decode(item.Title.links?.[0].page),
     type: types[item.col2.text],
-    releaseDate: item.Released.text,
+    releaseDate: item.Released?.text,
     writer: item["Writer(s)"].links?.map((e) => decode(e.page)) || null,
     date: decode(item.Year.text) || null,
     chronology: i,
@@ -738,8 +738,11 @@ const docFromPage = async (page, drafts) => {
 // while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
 for await (let page of pages) {
   let [doc, draft] = await docFromPage(page, drafts);
-  if (doc === null)
-    throw `${page.title} is a redlink in the timeline!`; // TODO: handle?
+  if (doc === null) {
+    log.warn(`${page.title} is a redlink in the timeline!`);
+    draft.redlink = true;
+    continue;
+  }
   draft.doc = doc; // We need this for the second iteration
   let infobox = doc.infobox();
   if (!infobox) {
@@ -843,6 +846,7 @@ log.setStatusBarText([`Second iteration (full types). Article: ${progress}/${out
 // Second iteration over media to get full types, for which we need series data.
 // Second iteration because we want to batch series fetching.
 for (let draft of Object.values(drafts)) {
+  if (draft.redlink) continue;
   figureOutFullTypes(draft, draft.doc, false, seriesDrafts);
   delete draft.doc;
 }
@@ -942,8 +946,9 @@ for await (let imageinfo of imageinfos) {
     // code to pick up from incomplete fetches
     let pos = myFilename.lastIndexOf(".");
     myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
+    await anyMissing(exists, myFilename);
     // We got the cover but it's not in the db (due to previous incomplete fetch)
-    if (!current && !(await anyMissing(exists, myFilename))) {
+    if (!current && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
       buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
     else if (!exists.FULL) {

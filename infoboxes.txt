@@ -3,12 +3,8 @@ comic book
 short story
 trade paperback
 comic story
-television series
 audiobook
+television series
+television episode
 movie
 video game
-television episode
-television season
-comic series
-comic strip
-reference book
