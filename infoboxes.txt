@@ -8,3 +8,7 @@ television series
 television episode
 movie
 video game
+television season
+comic series
+comic strip
+reference book

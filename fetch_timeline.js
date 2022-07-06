@@ -37,6 +37,7 @@ const suppressLog = {
 
 const CACHE_PAGES = true;
 const IMAGE_PATH = "../client/public/images/";
+const TV_IMAGE_PATH = `${IMAGE_PATH}tv-images/thumb/`;
 const NUMBERS = {
   'one': 1,
   'two': 2,
@@ -59,6 +60,7 @@ const NUMBERS = {
   'nineteen': 19,
   'twenty': 20,
 };
+const buildTvImagePath = (seriesTitle) => TV_IMAGE_PATH + seriesTitle.replaceAll(" ", "_") + ".webp";
 const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
 const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
 const seriesTypes = { // TODO full types
@@ -269,7 +271,7 @@ const reg = (str, title) => {
   const jr = /junior|middle[ -]grade|chapter book|young[ -]reader|young children/i;
   const ya = /young[ -]adult/i;
   const a = /adult|canon novel/i;
-  const aLow = /novels/i;
+  const aLow = /novels?/i;
   if (jr.test(str)) return "jr";
   if (ya.test(str)) return "ya";
   if (a.test(str)) return "a";
@@ -628,7 +630,7 @@ log.info("Fetching timeline...");
 let timelineDoc = wtf((await fetchWookiee("Timeline of canon media", CACHE_PAGES).next()).value.wikitext);
 //let timelineDoc = await fetchWookiee("Timeline_of_Legends_media");
 let data = timelineDoc.tables()[1].json();
-data = data.slice(0,850);
+// data = data.slice(0,850);
 
 const types = {
   C: "comic",
@@ -739,8 +741,9 @@ const docFromPage = async (page, drafts) => {
 for await (let page of pages) {
   let [doc, draft] = await docFromPage(page, drafts);
   if (doc === null) {
-    log.warn(`${page.title} is a redlink in the timeline!`);
-    draft.redlink = true;
+    log.warn(`${page.title} is a redlink in the timeline! Ignoring.`);
+    // draft.redlink = true;
+    delete drafts[page.title];
     continue;
   }
   draft.doc = doc; // We need this for the second iteration
@@ -1006,7 +1009,7 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverSha1 = current.coverSha1;
   }
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
-} 
+}
 
 let noFullTypes = Object.values(drafts).filter(e => ["tv","book","comic","game"].includes(e.type) && e.fullType === undefined).map(e => e.title);
 if (noFullTypes.length)
@@ -1022,13 +1025,18 @@ if (nopageDrafts.length)
 await series.insertMany(Object.values(seriesDrafts));
 
 let tvShowsNew = await media.distinct("series", {type: "tv"});
-let tvShowsOld = await db.collection("tv-images").find({}, {series: 1}).toArray();
-tvShowsOld = tvShowsOld.map(o => o.series);
+// let tvShowsOld = await db.collection("tv-images").find({}, {series: 1}).toArray();
+// tvShowsOld = tvShowsOld.map(o => o.series);
 for (let show of tvShowsNew) {
-  if (!tvShowsOld.includes(show)) {
+  // if (!tvShowsOld.includes(show)) {
+  //   log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
+  // }
+  if (!(await fileExists(buildTvImagePath(show)))) {
     log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
   }
 }
+
+
 
 await client.close();
 if (debug.distinctInfoboxes) {
