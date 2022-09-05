@@ -747,6 +747,9 @@ for await (let page of pages) {
     continue;
   }
   draft.doc = doc; // We need this for the second iteration
+  if (doc.isDisambig()) {
+    log.error("Disambiguation page! title: " + draft.title);
+  }
   let infobox = doc.infobox();
   if (!infobox) {
     log.error(page.wikitext.slice(0, 1500));
