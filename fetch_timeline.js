@@ -765,6 +765,9 @@ for await (let page of pages) {
   fillDraftWithInfoboxData(draft, infobox);
 
   if (draft.series) {
+    if (draft.type === "tv" && draft.series.length > 1) {
+      log.warn(`${title} has type "tv" and belongs to multiple series. This can cause bugs in frontend! Use of buildTvImagePath based on series array is one example.`);
+    }
     for (let seriesTitle of draft.series) {
       if (!(seriesTitle in seriesDrafts))
         seriesDrafts[seriesTitle] = { title: seriesTitle };
