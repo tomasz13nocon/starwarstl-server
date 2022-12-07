@@ -533,11 +533,11 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
   let seasonText = infobox.get("season").text();
   if (seasonText) {
     let seasonTextClean = seasonText.toLowerCase().trim();
-    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? +(seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1]);
+    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
     if (draft.season === undefined) {
       // We use word boundaries as last resort (and log it) in order to avoid false positives.
       // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
-      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? +(seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1]);
+      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
       if (draft.season && /shorts/i.test(seasonTextClean))
         draft.seasonNote = "shorts";
 
@@ -545,6 +545,8 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
         log.warn(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
       }
     }
+    if (!isNaN(parseInt(draft.season, 10)) && !isNaN(+draft.season))
+      draft.season = +draft.season;
   }
 
   if (draft.episode) {
