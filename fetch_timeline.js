@@ -353,6 +353,8 @@ const processAst = (sentence) => {
     list = [],
     listItem = [],
     current = newAst; // What we're pushing to (the new AST or a list item inside of it)
+  if (sentence.ast().length === 0)
+    return null;
   for (let [i, astNode] of sentence.ast().entries()) {
     astNode = _.mapValues(astNode, (e) =>
       typeof e === "string" ? decode(e) : e
@@ -531,11 +533,11 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
   let seasonText = infobox.get("season").text();
   if (seasonText) {
     let seasonTextClean = seasonText.toLowerCase().trim();
-    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1];
+    draft.season = NUMBERS[seasonTextClean.match(seasonReg)?.[1]] ?? +(seasonTextClean.match(/^(?:season )?(\d+)$/)?.[1]);
     if (draft.season === undefined) {
       // We use word boundaries as last resort (and log it) in order to avoid false positives.
       // log.warn(`Using word boundary regex to match season of "${draft.title}". Season text: ${seasonText}`);
-      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1];
+      draft.season = NUMBERS[seasonTextClean.match(seasonRegWordBoundaries)?.[1]] ?? +(seasonTextClean.match(/(?:season )?\b(\d+)\b/)?.[1]);
       if (draft.season && /shorts/i.test(seasonTextClean))
         draft.seasonNote = "shorts";
 
@@ -543,6 +545,14 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
         log.warn(`Couldn't get season of "${draft.title}". Season text: ${seasonText}`);
       }
     }
+  }
+
+  if (draft.episode) {
+    if (!/^\d+([–-]\d+)?$/.test(draft.episode)) {
+      log.error(`Episode '${draft.episode}' does not have a valid format! Title: ${draft.title}`);
+    }
+    // Unpractical to parse episodes to int due to double episodes written as 1-2
+    // draft.episode = +draft.episode;
   }
 
   // Delete empty values
@@ -766,7 +776,7 @@ for await (let page of pages) {
 
   if (draft.series) {
     if (draft.type === "tv" && draft.series.length > 1) {
-      log.warn(`${title} has type "tv" and belongs to multiple series. This can cause bugs in frontend! Use of buildTvImagePath based on series array is one example.`);
+      log.warn(`${title} has type "tv" and belongs to multiple series. This can cause bugs in frontend! Use of buildTvImagePath based on series array and collapsing adjacent tv episodes are some examples.`);
     }
     for (let seriesTitle of draft.series) {
       if (!(seriesTitle in seriesDrafts))
