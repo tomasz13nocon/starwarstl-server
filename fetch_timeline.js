@@ -36,7 +36,7 @@ const suppressLog = {
 };
 
 const CACHE_PAGES = true;
-const IMAGE_PATH = "../client/public/images/";
+const IMAGE_PATH = "../client/public/img/covers/";
 const TV_IMAGE_PATH = `${IMAGE_PATH}tv-images/thumb/`;
 const NUMBERS = {
   'one': 1,
@@ -1053,6 +1053,10 @@ for (let show of tvShowsNew) {
     log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
   }
 }
+let now = Date.now();
+log.info("Updating data timestamp: " + now);
+await db.collection("meta").updateOne({}, { $set: { dataUpdateTimestamp: now } });
+
 
 
 

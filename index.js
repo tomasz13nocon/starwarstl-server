@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { MongoClient } from  "mongodb";
+import compression from "compression";
 
 const API = "/api/"
 const app = express();
@@ -8,6 +9,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded());
+app.use(compression());
+
 
 const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
 try {
@@ -16,30 +19,60 @@ try {
   console.log(" Connected!");
 
   let db = client.db("swtimeline");
-  // let collection = db.collection("media");
+  let mediaCache, mediaTimestamp;
+  let mediaDetailsCache, mediaDetailsTimestamp;
+  let cacheStore = {};
 
-  app.get(`${API}test`, async (req, res) => {
-    await new Promise(r => setTimeout(r, 2000));
-    res.json({ msg: "hello" });
+  const cache = async (name, missCb) => {
+    let newTimestamp = await db.collection("meta").find().toArray();
+    newTimestamp = newTimestamp[0].dataUpdateTimestamp;
+    if (!newTimestamp)
+      console.error("UPDATE TIMESTAMP IS FALSEY!!!!");
+    if (newTimestamp && newTimestamp === cacheStore[name]?.timestamp) {
+      return cacheStore[name].data;
+    }
+    else {
+      let data = await missCb();
+      cacheStore[name] = {
+        timestamp: newTimestamp,
+        data: data,
+      };
+      return data;
+    }
+  }
+
+  // app.get(`${API}test`, async (req, res) => {
+  //   await new Promise(r => setTimeout(r, 2000));
+  //   res.json({ msg: "hello" });
+  // });
+
+  // TODO: remove perf
+  app.get(`${API}media`, async (req, res) => {
+    let t = performance.now();
+    res.json(await cache("media", () => {
+      return db.collection("media").find({}, { projection: { title: 1, releaseDate: 1, type: 1, fullType: 1, writer: 1, chronology: 1, date: 1, /* episode: 1, season: 1, series: 1, cover: 1 */ } }).toArray()
+    }));
+    console.log("media", performance.now() - t);
+    // let media = await db.collection("media").find().limit(40).toArray();
   });
 
-  app.get(`${API}media`, async (req, res) => {
-    // TODO cache?
-    let media = await db.collection("media").find().toArray();
-    res.json(media);
+  app.get(`${API}media-details`, async (req, res) => {
+    let t = performance.now();
+    res.json(await cache("media-details", () => db.collection("media").find().toArray()));
+    console.log("media details", performance.now() - t);
   });
 
   app.get(`${API}series`, async (req, res) => {
-    // TODO cache?
-    //TODO only titles
-    let series = await db.collection("series").find().toArray();
-    res.json(series);
+    // TODO only titles
+    let t = performance.now();
+    res.json(await cache("series", () => db.collection("series").find().toArray()));
+    console.log("series", performance.now() - t);
   });
 
-  app.get(`${API}tv-images`, async (req, res) => {
-    let tvImages = await db.collection("tv-images").find().toArray();
-    res.json(tvImages);
-  });
+  // app.get(`${API}tv-images`, async (req, res) => {
+  //   let tvImages = await db.collection("tv-images").find().toArray();
+  //   res.json(tvImages);
+  // });
 
   // app.put("/media/:title", async (req, res) => {
   //   console.log(req.params.title);
