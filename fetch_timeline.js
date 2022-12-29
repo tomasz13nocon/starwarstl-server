@@ -2,13 +2,14 @@ import wtf from "wtf_wikipedia";
 import _ from "lodash";
 import * as fs from "fs/promises";
 import sharp from "sharp";
-import sizeOf from "image-size";
+import sizeOf from "buffer-image-size";
 import { decode } from "html-entities";
 import { MongoClient } from  "mongodb";
 import logWithStatusbar from "log-with-statusbar";
 const log = logWithStatusbar();
 //import { default as fetchCache } from "node-fetch-cache";
 import { fetchBuilder, FileSystemCache } from "node-fetch-cache";
+import { encode } from "blurhash";
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
 
 const debug = {
@@ -519,7 +520,7 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
 
   // draft.coverWook = infobox.get("image").wikitext().match(/\[\[(.*)\]\]/)?.[1];
   draft.coverWook = infobox.get("image").wikitext().replaceAll(/(\[\[|File:|\]\]|\|.*)/g, "");
-  
+
   // if (draft.coverWook === undefined && infobox.get("image").text() !== "") {
   //   log.error(`Unexpected cover filename format! title: "${draft.title}", cover field in infobox: "${infobox.get("image").wikitext()}"`);
   // }
@@ -556,6 +557,14 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
     // Unpractical to parse episodes to int due to double episodes written as 1-2
     // draft.episode = +draft.episode;
   }
+
+  // season episode text like: "S2 E11"
+  draft.se = "";
+  if (draft.season) draft.se += "S" + draft.season;
+  if (draft.seasonNote) draft.se += "-" + draft.seasonNote;
+  if (draft.season && draft.episode) draft.se += " ";
+  if (draft.episode) draft.se += "E" + draft.episode;
+
 
   // Delete empty values
   for (const [key, value] of Object.entries(draft)) {
@@ -956,6 +965,7 @@ for await (let imageinfo of imageinfos) {
     !current.cover || // cover got added
     current.coverTimestamp < imageinfo.timestamp || // cover got updated
     await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing) TODO remove?
+      || true // TODO: remove
   ) {
     // if (!imageinfo.title.startsWith("File:")) {
     //   log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
@@ -1006,6 +1016,19 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverHeight = dimensions.height;
     drafts[articleTitle].coverTimestamp = imageinfo.timestamp;
     drafts[articleTitle].coverSha1 = imageinfo.sha1;
+    // if (!current.coverHash) {
+      sharp(`${IMAGE_PATH}${Size.THUMB}${myFilename}`)
+        .raw()
+        .ensureAlpha()
+        .toBuffer((err, buffer, { width, height }) => {
+          if (err) log.error("Error processing image for hash: ", err);
+          let ar = width / height;
+          let w = Math.floor(Math.min(9 ,Math.max(3, 3 * ar)));
+          let h = Math.floor(Math.min(9 ,Math.max(3, 3 / ar)));
+          drafts[articleTitle].coverHash = encode(new Uint8ClampedArray(buffer), width, height, w, h);
+          log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
+        });
+    // }
 
     // If we had a cover already and it didn't get overwritten, delete it
     if (current?.cover && current.cover !== myFilename) {
@@ -1025,6 +1048,7 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverHeight = current.coverHeight;
     drafts[articleTitle].coverTimestamp = current.coverTimestamp;
     drafts[articleTitle].coverSha1 = current.coverSha1;
+    drafts[articleTitle].coverHash = current.coverHash;
   }
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 }
