@@ -36,7 +36,7 @@ const suppressLog = {
   ],
 };
 
-const CACHE_PAGES = true;
+const CACHE_PAGES = false;
 const IMAGE_PATH = "../client/public/img/covers/";
 const TV_IMAGE_PATH = `${IMAGE_PATH}tv-images/thumb/`;
 const NUMBERS = {
@@ -64,7 +64,7 @@ const NUMBERS = {
 const buildTvImagePath = (seriesTitle) => TV_IMAGE_PATH + seriesTitle.replaceAll(" ", "_") + ".webp";
 const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
 const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
-const seriesTypes = { // TODO full types
+const seriesTypes = {
   "book series": "book",
   "comic series": "comic",
   "movie": "film",
@@ -75,7 +75,7 @@ const seriesTypes = { // TODO full types
 // Latter ones have higher priority, as they overwrite
 const seriesRegexes = {
   "multimedia": /multimedia project/i,
-  "comic": /((comic([ -]book)?|manga|graphic novel) (mini-?)?series|series of( young readers?)? (comic([ -]book)?s|mangas|graphic novels))/i, // TODO subtypes/full types
+  "comic": /((comic([ -]book)?|manga|graphic novel) (mini-?)?series|series of( young readers?)? (comic([ -]book)?s|mangas|graphic novels))/i,
   "short-story": /short stor(y|ies)/i,
   "game": /video game/i,
   // "yr": /((series of books|book series).*?young children|young[- ]reader.*?(book series|series of books))/i,
@@ -288,7 +288,6 @@ const reg = (str, title) => {
 const getAudience = async (doc) => {
   // We can't rely on books.disney.com even though it's the most official source,
   // because a lot of books are aribitrarily not there
-  // TODO: categories properly (nested categories etc.)
   let categories = doc.categories();
   if (categories.includes("Canon adult novels")) return "a";
   if (categories.includes("Canon young-adult novels")) return "ya";
@@ -362,7 +361,6 @@ const processAst = (sentence) => {
     );
     // If it's not a text node, just push
     if (astNode.type !== "text") {
-      // TODO delete unwanted properties. Like "raw" on links
       delete astNode.raw;
       current.push(astNode);
       continue;
@@ -698,7 +696,7 @@ for (let [i, item] of data.entries()) {
   if (item.Title.text.includes("†"))
     draft.exactPlacementUnknown = true;
 
-  // TODO: uncomment? "2022-??-??" is NaN tho..
+  // TODO: uncomment? "2022-??-??" is NaN tho.. // We're handling this on the client. Should we handle it here?
   // if (isNaN(new Date(draft.releaseDate)))
   // delete draft.releaseDate;
 
@@ -905,7 +903,15 @@ for (let bookSeries of bookSeriesArr) {
 ///// COVERS /////
 
 // TODO use a title index once I set it up
-let docs = await media.find({}, {projection:{title: 1, cover: 1, coverTimestamp: 1}}).toArray();
+let docs = await media.find({}, {projection:{
+  title: 1,
+  cover: 1,
+  coverTimestamp: 1,
+  coverWidth: 1,
+  coverHeight: 1,
+  coverSha1: 1,
+  coverHash: 1
+}}).toArray();
 
 let currentCovers = {};
 for (let doc of docs) {
@@ -965,7 +971,6 @@ for await (let imageinfo of imageinfos) {
     !current.cover || // cover got added
     current.coverTimestamp < imageinfo.timestamp || // cover got updated
     await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing) TODO remove?
-      || true // TODO: remove
   ) {
     // if (!imageinfo.title.startsWith("File:")) {
     //   log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
@@ -1026,7 +1031,7 @@ for await (let imageinfo of imageinfos) {
           let w = Math.floor(Math.min(9 ,Math.max(3, 3 * ar)));
           let h = Math.floor(Math.min(9 ,Math.max(3, 3 / ar)));
           drafts[articleTitle].coverHash = encode(new Uint8ClampedArray(buffer), width, height, w, h);
-          log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
+          // log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
         });
     // }
 
