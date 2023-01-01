@@ -9,7 +9,7 @@ import logWithStatusbar from "log-with-statusbar";
 const log = logWithStatusbar();
 //import { default as fetchCache } from "node-fetch-cache";
 import { fetchBuilder, FileSystemCache } from "node-fetch-cache";
-import { encode } from "blurhash";
+import { encode, isBlurhashValid } from "blurhash";
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
 
 const debug = {
@@ -984,7 +984,7 @@ for await (let imageinfo of imageinfos) {
     myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
     await anyMissing(exists, myFilename);
     // We got the cover but it's not in the db (due to previous incomplete fetch)
-    if (!current && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
+    if (!current.cover && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
       buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
     else if (!exists.FULL) {
@@ -1055,6 +1055,11 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverSha1 = current.coverSha1;
     drafts[articleTitle].coverHash = current.coverHash;
   }
+  let blurhashValid = isBlurhashValid(drafts[articleTitle].coverHash);
+  if (!blurhashValid.result) {
+    log.error("Blurhash invalid! Reason: " +blurhashValid.errorReason);
+  }
+
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
 }
 
