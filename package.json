@@ -23,6 +23,6 @@
     "mongodb": "^4.3.1",
     "node-fetch-cache": "^3.0.3",
     "sharp": "^0.30.2",
-    "wtf_wikipedia": "file:../client/wtf_wikipedia"
+    "wtf_wikipedia": "file:wtf_wikipedia"
   }
 }
