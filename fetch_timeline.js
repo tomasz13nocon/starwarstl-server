@@ -24,19 +24,43 @@ const debug = {
 };
 
 // Suppress specific warnings for specific titles after manually confirming they're not an issue
+// TODO read these from a file
 const suppressLog = {
   lowConfidenceManga: ["The Banchiians"],
-  lowConfidenceAdultNovel: ["Star Wars: The Aftermath Trilogy"],
+  lowConfidenceAdultNovel: [
+    "Star Wars: The Aftermath Trilogy",
+    "The High Republic: Cataclysm"
+  ],
   multipleRegexMatches: [
     "Star Wars: The High Republic (Marvel Comics 2021)",
     "Star Wars: The High Republic Adventures",
     "Star Wars: The High Republic: The Edge of Balance",
     "Star Wars: The High Republic: Trail of Shadows",
     "Star Wars: The High Republic: Eye of the Storm",
+    "Star Wars: The High Republic Adventures (IDW Publishing 2021)",
+    "Star Wars: The High Republic — The Blade",
+    "Star Wars: The High Republic Adventures: The Nameless Terror",
+  ],
+  lowConfidenceAnimated: [
+    "Hunted",
   ],
 };
 
-const CACHE_PAGES = false;
+let CACHE_PAGES = false;
+
+// Command line args
+for (let arg of process.argv.slice(2)) {
+  switch (arg) {
+    case "--cache":
+    case "-c":
+      CACHE_PAGES = true;
+      break;
+    default:
+      log.error(`Unknown argument: ${arg}`);
+      process.exit(1);
+  };
+};
+
 const IMAGE_PATH = "../client/public/img/covers/";
 const TV_IMAGE_PATH = `${IMAGE_PATH}tv-images/thumb/`;
 const NUMBERS = {
@@ -605,7 +629,9 @@ const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
         log.warn(`Unknown TV full type. Series: "${seriesTitle}", categories: ${seriesDoc.categories()}`);
         if (/animated/i.test(seriesDoc.sentence(0).text()) || /\bCG\b|\bCGI\b/.test(seriesDoc.sentence(0).text())) {
           draft.fullType = "tv-animated";
-          log.warn(`Inferring animated type from sentence: ${seriesDoc.sentence(0).text()}`);
+          if (!suppressLog.lowConfidenceAnimated.includes(seriesTitle)) {
+            log.warn(`Inferring animated type from sentence: ${seriesDoc.sentence(0).text()}`);
+          }
         }
         else {
           draft.fullType = "tv-live-action";
@@ -960,6 +986,11 @@ const anyMissing = async (exists, filename) => {
   return Object.values(exists).some(e => e === false);
 }
 
+for (const [key, value] of Object.entries(Size)) {
+  await fs.mkdir(`${IMAGE_PATH}${value}`, { recursive: true });
+}
+await fs.mkdir(`${TV_IMAGE_PATH}`, { recursive: true });
+
 for await (let imageinfo of imageinfos) {
   // Keep in mind imageinfo.title is a filename of the image, not the article title
   let articleTitle = titlesDict[(imageinfo.normalizedFrom ?? imageinfo.title).slice(5)];
@@ -970,7 +1001,7 @@ for await (let imageinfo of imageinfos) {
     !current || // new media (not in DB yet)
     !current.cover || // cover got added
     current.coverTimestamp < imageinfo.timestamp || // cover got updated
-    await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing) TODO remove?
+    await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing)
   ) {
     // if (!imageinfo.title.startsWith("File:")) {
     //   log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
@@ -982,9 +1013,9 @@ for await (let imageinfo of imageinfos) {
     // code to pick up from incomplete fetches
     let pos = myFilename.lastIndexOf(".");
     myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
-    await anyMissing(exists, myFilename);
+    // await anyMissing(exists, myFilename); // already doing this in the if
     // We got the cover but it's not in the db (due to previous incomplete fetch)
-    if (!current.cover && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
+    if (!current?.cover && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
       buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
     }
     else if (!exists.FULL) {
@@ -1022,18 +1053,23 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverTimestamp = imageinfo.timestamp;
     drafts[articleTitle].coverSha1 = imageinfo.sha1;
     // if (!current.coverHash) {
-      sharp(`${IMAGE_PATH}${Size.THUMB}${myFilename}`)
+    try {
+      let { data: bufferData, info: { width, height } } =
+        await sharp(`${IMAGE_PATH}${Size.THUMB}${myFilename}`)
         .raw()
         .ensureAlpha()
-        .toBuffer((err, buffer, { width, height }) => {
-          if (err) log.error("Error processing image for hash: ", err);
-          let ar = width / height;
-          let w = Math.floor(Math.min(9 ,Math.max(3, 3 * ar)));
-          let h = Math.floor(Math.min(9 ,Math.max(3, 3 / ar)));
-          drafts[articleTitle].coverHash = encode(new Uint8ClampedArray(buffer), width, height, w, h);
-          // log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
-        });
-    // }
+        .toBuffer({ resolveWithObject: true });
+      log.warn(width, height, bufferData);
+      let ar = width / height;
+      let w = Math.floor(Math.min(9 ,Math.max(3, 3 * ar)));
+      let h = Math.floor(Math.min(9 ,Math.max(3, 3 / ar)));
+      drafts[articleTitle].coverHash = encode(new Uint8ClampedArray(bufferData), width, height, w, h);
+      log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
+    }
+    catch (err) {
+      log.error(`Error calculating hash for image: "${myFilename}" `, err);
+      process.exit(1);
+    };
 
     // If we had a cover already and it didn't get overwritten, delete it
     if (current?.cover && current.cover !== myFilename) {
@@ -1055,9 +1091,10 @@ for await (let imageinfo of imageinfos) {
     drafts[articleTitle].coverSha1 = current.coverSha1;
     drafts[articleTitle].coverHash = current.coverHash;
   }
+
   let blurhashValid = isBlurhashValid(drafts[articleTitle].coverHash);
   if (!blurhashValid.result) {
-    log.error("Blurhash invalid! Reason: " +blurhashValid.errorReason);
+    log.error(`Blurhash invalid for ${imageinfo.title} of ${articleTitle}! Hash: "${drafts[articleTitle].coverHash}" Reason: ` + blurhashValid.errorReason);
   }
 
   log.setStatusBarText([`Image: ${++progress}/${outOf}`]);
