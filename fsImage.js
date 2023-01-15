@@ -52,7 +52,7 @@ export class FsImage {
       resized += "thumb, ";
     }
     if (resized) {
-      log.info(`resized ${this.filename} to ${resized.slice(0, -2)}`);
+      log.info(`Resized ${this.filename} to ${resized.slice(0, -2)}`);
     }
   }
 

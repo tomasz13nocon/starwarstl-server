@@ -47,7 +47,7 @@ for (let i = 2; i < process.argv.length; i++) {
 
 const debug = {
   // Write a list of distinct infobox templates to file
-  distinctInfoboxes: true,
+  distinctInfoboxes: false,
   // Warn on bad, yet recoverable wikitext
   badWikitext: false, // not implemented
   // Warn on redlinks
@@ -803,7 +803,12 @@ const docFromPage = async (page, drafts) => {
 for await (let page of pages) {
   let [doc, draft] = await docFromPage(page, drafts);
   if (doc === null) {
-    log.warn(`${page.title} is a redlink in the timeline! Ignoring.`);
+    if (debug.redlinks) {
+      log.warn(`${page.title} is a redlink in the timeline! Ignoring.`);
+    }
+    else {
+      log.info(`${page.title} is a redlink in the timeline! Ignoring.`);
+    }
     // draft.redlink = true;
     delete drafts[page.title];
     continue;

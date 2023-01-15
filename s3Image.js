@@ -1,6 +1,6 @@
 import "./env.js";
 import sharp from "sharp";
-import { Size, S3_IMAGE_PATH } from "./utils.js";
+import { Size, S3_IMAGE_PATH, log } from "./utils.js";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 
 const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY;
@@ -59,17 +59,24 @@ export class S3Image {
 
   async writeVariantsIfMissing(buffer) {
     let b;
+    let resized = "";
     if (!await this.exists(Size.MEDIUM)) {
       b = await sharp(buffer).resize(500, null, { withoutEnlargement: true }).toBuffer();
       await this.write(b, Size.MEDIUM);
+      resized += "medium, ";
     }
     if (!await this.exists(Size.SMALL)) {
       b = await sharp(buffer).resize(220, null, { withoutEnlargement: true }).toBuffer();
       await this.write(b, Size.SMALL);
+      resized += "small, ";
     }
     if (!await this.exists(Size.THUMB)) {
       b = await sharp(buffer).resize(55, null, { withoutEnlargement: true }).toBuffer();
       await this.write(b, Size.THUMB);
+      resized += "thumb, ";
+    }
+    if (resized) {
+      log.info(`Resized ${this.filename} to ${resized.slice(0, -2)}`);
     }
   }
 
