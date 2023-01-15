@@ -1,3 +1,4 @@
+import "./env.js";
 import wtf from "wtf_wikipedia";
 import _ from "lodash";
 import * as fs from "fs/promises";
@@ -5,12 +6,44 @@ import sharp from "sharp";
 import sizeOf from "buffer-image-size";
 import { decode } from "html-entities";
 import { MongoClient } from  "mongodb";
-import logWithStatusbar from "log-with-statusbar";
-const log = logWithStatusbar();
 //import { default as fetchCache } from "node-fetch-cache";
+import { FsImage } from "./fsImage.js";
+import { S3Image } from "./s3Image.js";
 import { fetchBuilder, FileSystemCache } from "node-fetch-cache";
 import { encode, isBlurhashValid } from "blurhash";
+import { buildTvImagePath, fileExists, Size, log } from "./utils.js";
+
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
+
+let CACHE_PAGES = false;
+let LIMIT;
+let Image = S3Image;
+
+// Command line args
+for (let i = 2; i < process.argv.length; i++) {
+  let arg = process.argv[i];
+
+  if (arg === "--cache" || arg === "-c") {
+    CACHE_PAGES = true;
+  }
+  else if (arg === "--limit" || arg === "-l") {
+    i++;
+    let value = +(process.argv[i]);
+    if (i >= process.argv.length || !Number.isInteger(value) || value < 1) {
+      log.error(`option ${arg} requires a positive integer value`);
+      process.exit(1);
+    }
+    LIMIT = value;
+  }
+  else if (arg === "--fs") {
+    Image = FsImage;
+  }
+  else {
+    log.error(`Unknown argument: ${arg}`);
+    process.exit(1);
+  }
+};
+
 
 const debug = {
   // Write a list of distinct infobox templates to file
@@ -46,23 +79,6 @@ const suppressLog = {
   ],
 };
 
-let CACHE_PAGES = false;
-
-// Command line args
-for (let arg of process.argv.slice(2)) {
-  switch (arg) {
-    case "--cache":
-    case "-c":
-      CACHE_PAGES = true;
-      break;
-    default:
-      log.error(`Unknown argument: ${arg}`);
-      process.exit(1);
-  };
-};
-
-const IMAGE_PATH = "../client/public/img/covers/";
-const TV_IMAGE_PATH = `${IMAGE_PATH}tv-images/thumb/`;
 const NUMBERS = {
   'one': 1,
   'two': 2,
@@ -85,7 +101,6 @@ const NUMBERS = {
   'nineteen': 19,
   'twenty': 20,
 };
-const buildTvImagePath = (seriesTitle) => TV_IMAGE_PATH + seriesTitle.replaceAll(" ", "_") + ".webp";
 const seasonReg = new RegExp("^(?:season )?(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")$");
 const seasonRegWordBoundaries = new RegExp("(?:season )?\\b(" + Object.keys(NUMBERS).reduce((acc, n) => `${acc}|${n}`) + ")\\b");
 const seriesTypes = {
@@ -196,7 +211,7 @@ maxlag=1&\
 maxage=604800&\
 titles=${encodeURIComponent(titlesStr)}\
 ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${value}`, "")}`;
-    const resp = cache ? await fetchCache(apiUrl) : await fetch(apiUrl); // TODO switch to normal fetch
+    const resp = cache ? await fetchCache(apiUrl) : await fetch(apiUrl, { headers: { "Accept-Encoding": "gzip", "User-Agent": "starwarstl_bot (https://starwarstl.com; mail@starwarstl.com)" } });
     requestNum++;
     if (!resp.ok) {
       throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
@@ -675,7 +690,9 @@ log.info("Fetching timeline...");
 let timelineDoc = wtf((await fetchWookiee("Timeline of canon media", CACHE_PAGES).next()).value.wikitext);
 //let timelineDoc = await fetchWookiee("Timeline_of_Legends_media");
 let data = timelineDoc.tables()[1].json();
-// data = data.slice(0,850);
+if (LIMIT) {
+  data = data.slice(0, LIMIT);
+}
 
 const types = {
   C: "comic",
@@ -959,127 +976,80 @@ log.setStatusBarText([`Image: ${progress}/${outOf}`]);
 
 let imageinfos = fetchImageInfo(covers);
 
-const fileExists = async (path) => {
-  try {
-    await fs.stat(path);
-  }
-  catch (e) {
-    if (e.code === "ENOENT") {
-      return false;
-    }
-    throw e;
-  }
-  return true;
-};
-
-const Size = Object.freeze({
-  THUMB: "thumb/",
-  MEDIUM: "medium/",
-  SMALL: "small/",
-  FULL: "",
-});
-
-const anyMissing = async (exists, filename) => {
-  for (const [key, value] of Object.entries(Size)) {
-    exists[key] = await fileExists(`${IMAGE_PATH}${value}${filename}`);
-  }
-  return Object.values(exists).some(e => e === false);
-}
-
-for (const [key, value] of Object.entries(Size)) {
-  await fs.mkdir(`${IMAGE_PATH}${value}`, { recursive: true });
-}
-await fs.mkdir(`${TV_IMAGE_PATH}`, { recursive: true });
-
 for await (let imageinfo of imageinfos) {
   // Keep in mind imageinfo.title is a filename of the image, not the article title
   let articleTitle = titlesDict[(imageinfo.normalizedFrom ?? imageinfo.title).slice(5)];
   let current = currentCovers[articleTitle];
-  let exists = {};
+  // Remove leading "File:"
+  let myFilename = imageinfo.title.slice(5);
+  // Change extension to webp
+  let pos = myFilename.lastIndexOf(".");
+  myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
+  let image = new Image(myFilename);
 
+  // Check if we need to get any covers
   if (
     !current || // new media (not in DB yet)
     !current.cover || // cover got added
     current.coverTimestamp < imageinfo.timestamp || // cover got updated
-    await anyMissing(exists, current.cover) // any cover size doesn't exist (mostly due to me deleting files during testing)
+    await image.anyMissing() // any cover variant missing
   ) {
-    // if (!imageinfo.title.startsWith("File:")) {
-    //   log.error(`${articleTitle}'s cover does not start with "File:". Filename: ${imageinfo.title}`);
-    // }
-    // remove leading "File:"
-    let myFilename = imageinfo.title.slice(5);
     let buffer;
 
-    // code to pick up from incomplete fetches
-    let pos = myFilename.lastIndexOf(".");
-    myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
-    // await anyMissing(exists, myFilename); // already doing this in the if
-    // We got the cover but it's not in the db (due to previous incomplete fetch)
-    if (!current?.cover && exists.FULL/* && !(await anyMissing(exists, myFilename))*/) {
-      buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
+    // TODO: Handle cover updates (timestamp).
+    // Read cover if we have it, else fetch it
+    if (await image.exists(Size.FULL)) {
+      buffer = await image.read();
     }
-    else if (!exists.FULL) {
-      let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } });
+    else {
+      let resp = await fetchCache(imageinfo.url, { headers: { Accept: "image/webp,*/*;0.9" } }); // TODO why fetchCache??
       requestNum++;
       if (!resp.ok) {
         throw "Non 2xx response status! Response:\n" + JSON.stringify(resp);
       }
-      if (resp.headers.get("Content-Type") === "image/webp") {
-        let pos = myFilename.lastIndexOf(".");
-        myFilename = myFilename.substr(0, pos < 0 ? myFilename.length : pos) + ".webp";
-      }
-      else {
-        log.warn(`Image in non webp. article: ${articleTitle}, filename: ${myFilename}`);
+      if (resp.headers.get("Content-Type") !== "image/webp") {
+        log.error(`Image in non webp. article: ${articleTitle}, filename: ${image.filename}`);
+        // image.filename = imageinfo.title.slice(5);
+        process.exit(1);
       }
       let respSize = (await resp.clone().blob()).size;
       imageBytesRecieved += respSize;
       log.info(`Recieved ${toHumanReadable(respSize)} of image "${imageinfo.title}"`);
       buffer = await resp.buffer();
+      log.info(`Writing cover for "${articleTitle}" named "${image.filename}"`);
+      await image.write(buffer);
     }
-    else {
-      myFilename = current.cover;
-      buffer = await fs.readFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`);
-    }
-    log.info(`Writing cover for "${articleTitle}" named "${myFilename}"`);
-    if (!exists.FULL) await fs.writeFile(`${IMAGE_PATH}${Size.FULL}${myFilename}`, buffer);
-    // TODO don't resize up??
-    if (!exists.MEDIUM) await sharp(buffer).webp({ nearLossless: true }).resize(500).toFile(`${IMAGE_PATH}${Size.MEDIUM}${myFilename}`);
-    if (!exists.SMALL) await sharp(buffer).webp({ nearLossless: true }).resize(220).toFile(`${IMAGE_PATH}${Size.SMALL}${myFilename}`);
-    if (!exists.THUMB) await sharp(buffer).webp({ nearLossless: true }).resize(55).toFile(`${IMAGE_PATH}${Size.THUMB}${myFilename}`);
-    drafts[articleTitle].cover = myFilename;
+
+    await image.writeVariantsIfMissing(buffer);
+
     const dimensions = sizeOf(buffer);
+    drafts[articleTitle].cover = image.filename;
     drafts[articleTitle].coverWidth = dimensions.width;
     drafts[articleTitle].coverHeight = dimensions.height;
     drafts[articleTitle].coverTimestamp = imageinfo.timestamp;
     drafts[articleTitle].coverSha1 = imageinfo.sha1;
-    // if (!current.coverHash) {
     try {
       let { data: bufferData, info: { width, height } } =
-        await sharp(`${IMAGE_PATH}${Size.THUMB}${myFilename}`)
+        await sharp(await image.read(Size.THUMB))
         .raw()
         .ensureAlpha()
         .toBuffer({ resolveWithObject: true });
-      log.warn(width, height, bufferData);
       let ar = width / height;
       let w = Math.floor(Math.min(9 ,Math.max(3, 3 * ar)));
       let h = Math.floor(Math.min(9 ,Math.max(3, 3 / ar)));
       drafts[articleTitle].coverHash = encode(new Uint8ClampedArray(bufferData), width, height, w, h);
-      log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
+      // log.info(`Hashed cover to ${drafts[articleTitle].coverHash}`);
     }
     catch (err) {
-      log.error(`Error calculating hash for image: "${myFilename}" `, err);
+      log.error(`Error calculating hash for image: "${image.filename}" `, err);
       process.exit(1);
     };
 
     // If we had a cover already and it didn't get overwritten, delete it
-    if (current?.cover && current.cover !== myFilename) {
-      log.info(`Deleteing old cover: ${current.cover} in favor of ${myFilename}`);
-      try {
-        await fs.unlink(`${IMAGE_PATH}${current.cover}`);
-      } catch (e) {
-        if (!e.code === "ENOENT") // It's already deleted
-          throw e;
-      }
+    if (current?.cover && current.cover !== image.filename) {
+      log.info(`Deleteing old cover: ${current.cover} in favor of ${image.filename}`);
+      let oldImage = new Image(current.cover);
+      await oldImage.delete();
     }
   }
   else {
@@ -1121,14 +1091,12 @@ for (let show of tvShowsNew) {
   //   log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
   // }
   if (!(await fileExists(buildTvImagePath(show)))) {
-    log.error("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
+    log.warn("New tv series! Its thumbnail has to be uploaded manually. title: " + show);
   }
 }
 let now = Date.now();
 log.info("Updating data timestamp: " + now);
 await db.collection("meta").updateOne({}, { $set: { dataUpdateTimestamp: now } });
-
-
 
 
 await client.close();

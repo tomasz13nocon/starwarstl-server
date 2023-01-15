@@ -3,3 +3,4 @@
 /dist
 infoboxes.txt
 seriesInfoboxes.txt
+.env*
