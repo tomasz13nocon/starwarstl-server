@@ -27,6 +27,13 @@ export async function fileExists(filename) {
   return true;
 }
 
-export const log = logWithStatusbar();
-log.setStatusBarText([""]);
+export let log;
+if (process.stdout.isTTY) {
+  log = logWithStatusbar();
+  log.setStatusBarText([""]);
+}
+else {
+  console.setStatusBarText = () => {};
+  log = console;
+}
 
