@@ -3,8 +3,12 @@ import sharp from "sharp";
 // import fetch from "node-fetch";
 import { MongoClient } from  "mongodb";
 import { decode } from "html-entities";
+import { S3Image } from "./s3Image.js";
 
-console.log(decode("https://qwe.com/lol#xd"));
+let image = new S3Image("17DarthVader.webp");
+console.log("exists: " + await image.exists());
+
+// console.log(decode("https://qwe.com/lol#xd"));
 
 // const client = new MongoClient("mongodb://127.0.0.1:27017/?directConnection=true");
 // await client.connect();

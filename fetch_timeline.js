@@ -18,6 +18,9 @@ const fetchCache = fetchBuilder.withCache(new FileSystemCache());
 let CACHE_PAGES = false;
 let LIMIT;
 let Image = S3Image;
+if (process.env.IMAGE_HOST === "filesystem") {
+  Image = FsImage;
+}
 
 // Command line args
 for (let i = 2; i < process.argv.length; i++) {
@@ -38,11 +41,21 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (arg === "--fs") {
     Image = FsImage;
   }
+  else if (arg === "--s3") {
+    Image = S3Image;
+  }
   else {
     log.error(`Unknown argument: ${arg}`);
     process.exit(1);
   }
-};
+}
+
+if (Image === S3Image) {
+  log.info("Using S3 as image host");
+}
+else if (Image === FsImage) {
+  log.info("Using filesystem as image host");
+}
 
 
 const debug = {
@@ -195,7 +208,7 @@ const toHumanReadable = (n) => {
   else if (n < 1000000) return `${n / 1000} KB`;
   else if (n < 1000000000) return `${n / 1000000} MB`;
   else if (n < 1000000000000) return `${n / 1000000000} GB`;
-}
+};
 
 // Code extracted to use in fetchWookiee and fetchImageInfo
 const fetchWookieeHelper = async function* (titles, apiParams = {}, cache = true) {
@@ -249,7 +262,7 @@ ${Object.entries(apiParams).reduce((acc, [key, value]) => acc += `&${key}=${valu
       yield page;
     }
   }
-}
+};
 
 // yields objects containing title, pageid and wikitext
 // number of yields will be the same as the amount of titles provided
@@ -305,7 +318,7 @@ const docFromTitle = async (title) => {
   if (page.missing)
     return null;
   return wtf(page.wikitext);
-}
+};
 
 const reg = (str, title) => {
   const jr = /junior|middle[ -]grade|chapter book|young[ -]reader|young children/i;
@@ -489,7 +502,7 @@ const processAst = (sentence) => {
 
 const getPageWithAnchor = link => {
   return link.page() + (link.anchor() ? "#" + link.anchor() : "");
-}
+};
 
 const fillDraftWithInfoboxData = (draft, infobox) => {
   for (const [key, value] of Object.entries(
@@ -682,7 +695,7 @@ const figureOutFullTypes = async (draft, doc, series, seriesDrafts = {}) => {
     else
       draft.fullType = "comic";
   }
-}
+};
 
 log.info("Fetching timeline...");
 //let timelineDoc = wtf(timelineString);
@@ -703,7 +716,7 @@ const types = {
   TV: "tv",
   F: "film",
   VG: "game",
-}
+};
 
 
 let drafts = {};
@@ -732,9 +745,10 @@ for (let [i, item] of data.entries()) {
   if (notes.length > 1) {
     draft.timelineNotes = [{ type: "list", data: notes.slice(1).map(s => ([{ type: "text", text: s.trim() }])) }]; // TODO:parser get links and such, not just text
     for (let s of draft.timelineNotes[0].data) {
-      if (s[0].text.toLowerCase().includes("adaptation"))
+      let note = s[0].text.toLowerCase();
+      if (note.includes("adaptation") || note.includes("novelization"))
         draft.adaptation = true;
-    };
+    }
   }
   if (item.Title.text.includes("†"))
     draft.exactPlacementUnknown = true;
@@ -789,7 +803,7 @@ const docFromPage = async (page, drafts) => {
 
   let doc = wtf(page.wikitext);
   while (doc.isRedirect()) {
-    log.info(`Article ${draft.title} is a redirect to ${doc.redirectTo().page}. Fetching...`)
+    log.info(`Article ${draft.title} is a redirect to ${doc.redirectTo().page}. Fetching...`);
     redirectNum++;
     draft.redirect = true;
     doc = await docFromTitle(doc.redirectTo().page);
@@ -797,7 +811,7 @@ const docFromPage = async (page, drafts) => {
       throw `Not a valid wookieepedia article!`;
   }
   return [doc, draft];
-}
+};
 
 // while (!(page = await pages.next()).done && !(imageinfo = await imageinfos.next()).done) {
 for await (let page of pages) {
@@ -824,7 +838,7 @@ for await (let page of pages) {
   }
 
   if (debug.distinctInfoboxes && !infoboxes.includes(infobox._type))
-    infoboxes.push(infobox._type, "\n")
+    infoboxes.push(infobox._type, "\n");
 
   if (infobox._type ==="audiobook")
     draft.audiobook === true;
@@ -833,7 +847,7 @@ for await (let page of pages) {
 
   if (draft.series) {
     if (draft.type === "tv" && draft.series.length > 1) {
-      log.warn(`${title} has type "tv" and belongs to multiple series. This can cause bugs in frontend! Use of buildTvImagePath based on series array and collapsing adjacent tv episodes are some examples.`);
+      log.warn(`${draft.title} has type "tv" and belongs to multiple series. This can cause bugs in frontend! Use of buildTvImagePath based on series array and collapsing adjacent tv episodes are some examples.`);
     }
     for (let seriesTitle of draft.series) {
       if (!(seriesTitle in seriesDrafts))
@@ -857,7 +871,7 @@ for await (let page of seriesPages) {
       log.warn(`Series ${seriesDraft.title} is a redlink!`);
     }
     // infer series type from episodes
-    log.info(`Inferring series type from episodes of a redlink series: ${seriesDraft.title}`)
+    log.info(`Inferring series type from episodes of a redlink series: ${seriesDraft.title}`);
     let episodes = Object.values(drafts).filter(e => e.series?.includes(seriesDraft.title));
     let epType;
     if (episodes.every((e, index) => index === 0 ? epType = e.type : epType === e.type)) {
@@ -1048,7 +1062,7 @@ for await (let imageinfo of imageinfos) {
     catch (err) {
       log.error(`Error calculating hash for image: "${image.filename}" `, err);
       process.exit(1);
-    };
+    }
 
     // If we had a cover already and it didn't get overwritten, delete it
     if (current?.cover && current.cover !== image.filename) {
@@ -1109,9 +1123,12 @@ if (debug.distinctInfoboxes) {
   await fs.writeFile("infoboxes.txt", infoboxes);
   await fs.writeFile("seriesInfoboxes.txt", seriesInfoboxes);
 }
-log.info(`Done!
+log.info(
+`Done!
 Number of redirects encountered: ${redirectNum}
 Total API data recieved: ${toHumanReadable(bytesRecieved)}
 Total image data recieved: ${toHumanReadable(imageBytesRecieved)}
-Number of HTTP requests made: ${requestNum}`);
+Number of HTTP requests made: ${requestNum}
+${Image.s3requests !== undefined ? "Number of S3 requests: read: " + Image.s3requests.read + ", write: " + Image.s3requests.write : ""}`
+);
 

@@ -1,7 +1,7 @@
 import "./env.js";
 import sharp from "sharp";
 import { Size, S3_IMAGE_PATH, log } from "./utils.js";
-import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY;
 const AWS_SECRET_KEY = process.env.AWS_SECRET_KEY;
@@ -9,52 +9,81 @@ const BUCKET = "starwarstl";
 const s3client = new S3Client({ region: "us-east-1", credentials: { accessKeyId: AWS_ACCESS_KEY, secretAccessKey: AWS_SECRET_KEY } });
 
 export class S3Image {
+  static #existsCache = {};
+  static s3requests = {
+    read: 0,
+    write: 0,
+  };
+
   constructor(filename) {
     this.filename = filename;
-    this.existsCache = {};
   }
 
   /** Returns true if any size variant is missing */
   async anyMissing() {
     // only check full size because S3 requests cost money 🤷
-    return await this.exists();
-    // let exists = {};
-    // for (const [key, value] of Object.entries(Size)) {
-    //   exists[key] = await this.exists(value);
-    // }
-    // return Object.values(exists).some(e => e === false);
+    // return await this.exists();
+    let exists = {};
+    for (const [key, value] of Object.entries(Size)) {
+      exists[key] = await this.exists(value);
+    }
+    return Object.values(exists).some(e => e === false);
   }
 
   async exists(size = Size.FULL) {
-    if (this.existsCache[size] !== undefined) {
-      return this.existsCache[size];
+    if (S3Image.#existsCache[size] !== undefined) {
+      return S3Image.#existsCache[size][this.filename];
     }
-    try {
-      await s3client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: `${S3_IMAGE_PATH}${size}${this.filename}` }));
-    }
-    catch (e) {
-      if (e.$metadata.httpStatusCode === 404) {
-        this.existsCache[size] = false;
-        return false;
+
+    let truncated = true;
+    let continuationToken;
+    S3Image.#existsCache[size] = {};
+    while (truncated) {
+      const response = await s3client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: `${S3_IMAGE_PATH}${size}`, ContinuationToken: continuationToken }));
+      S3Image.s3requests.read++;
+
+      for (let item of response.Contents) {
+        S3Image.#existsCache[size][item.Key] = true;
       }
-      throw e;
+
+      truncated = response.IsTruncated;
+      if (truncated) {
+        continuationToken = response.NextContinuationToken;
+      }
     }
-    this.existsCache[size] = true;
-    return true;
+
+    // if (this.existsCache[size] !== undefined) {
+    //   return this.existsCache[size];
+    // }
+    // try {
+    //   await s3client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: `${S3_IMAGE_PATH}${size}${this.filename}` }));
+    //   S3Image.s3requests.read++;
+    // }
+    // catch (e) {
+    //   if (e.$metadata.httpStatusCode === 404) {
+    //     this.existsCache[size] = false;
+    //     return false;
+    //   }
+    //   throw e;
+    // }
+    // this.existsCache[size] = true;
+    // return true;
   }
 
   async read(size = Size.FULL) {
     let data = (await s3client.send(new GetObjectCommand({ Bucket: BUCKET, Key: `${S3_IMAGE_PATH}${size}${this.filename}`}))).Body;
+    S3Image.s3requests.read++;
     return new Promise((resolve, reject) => {
-      const chunks = []
-      data.on('data', chunk => chunks.push(chunk))
-      data.once('end', () => resolve(Buffer.concat(chunks)))
-      data.once('error', reject)
-    })
+      const chunks = [];
+      data.on('data', chunk => chunks.push(chunk));
+      data.once('end', () => resolve(Buffer.concat(chunks)));
+      data.once('error', reject);
+    });
   }
 
   async write(buffer, size = Size.FULL) {
     await s3client.send(new PutObjectCommand({ Bucket: BUCKET, Key: `${S3_IMAGE_PATH}${size}${this.filename}`, Body: buffer, ContentType: "image/webp" }));
+    S3Image.s3requests.write++;
   }
 
   async writeVariantsIfMissing(buffer) {
@@ -82,18 +111,19 @@ export class S3Image {
 
   /** If size is undefined delete all sizes. */
   async delete(size) {
-      if (size === undefined) {
-        for (const s of Object.values(Size)) {
-          await this.#deleteHelper(s);
-        }
+    if (size === undefined) {
+      for (const s of Object.values(Size)) {
+        await this.#deleteHelper(s);
       }
-      else {
-        await this.#deleteHelper(size);
-      }
+    }
+    else {
+      await this.#deleteHelper(size);
+    }
   }
 
   async #deleteHelper(size) {
     await s3client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: `${S3_IMAGE_PATH}${size}${this.filename}` }));
+    S3Image.s3requests.write++;
   }
 }
 
