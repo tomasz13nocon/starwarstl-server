@@ -11,15 +11,19 @@ import { FsImage } from "./fsImage.js";
 import { S3Image } from "./s3Image.js";
 import { fetchBuilder, FileSystemCache } from "node-fetch-cache";
 import { encode, isBlurhashValid } from "blurhash";
-import { buildTvImagePath, fileExists, Size, log } from "./utils.js";
+import { buildTvImagePath, fileExists, Size, log, unscuffDate } from "./utils.js";
+import { parseWookieepediaDate, UnsupportedDateFormat } from "./parseWookieepediaDate.js";
 
 const fetchCache = fetchBuilder.withCache(new FileSystemCache());
 
 let CACHE_PAGES = false;
 let LIMIT;
-let Image = S3Image;
+let Image = FsImage;
 if (process.env.IMAGE_HOST === "filesystem") {
   Image = FsImage;
+}
+else if (process.env.IMAGE_HOST === "s3") {
+  Image = S3Image;
 }
 
 // Command line args
@@ -507,7 +511,7 @@ const getPageWithAnchor = link => {
 const fillDraftWithInfoboxData = (draft, infobox) => {
   for (const [key, value] of Object.entries(
     getInfoboxData(infobox, [
-      { aliases: ["release date", "airdate", "publication date", "released", "first aired"], details: true },
+      { aliases: ["release date", "airdate", "publication date", "publish date", "released", "first aired"], details: true },
       "closed",
       "author",
       { aliases: ["writer", "writers"], details: true },
@@ -574,6 +578,23 @@ const fillDraftWithInfoboxData = (draft, infobox) => {
   // if (draft.coverWook === undefined && infobox.get("image").text() !== "") {
   //   log.error(`Unexpected cover filename format! title: "${draft.title}", cover field in infobox: "${infobox.get("image").wikitext()}"`);
   // }
+
+  if (draft.releaseDate && !draft.releaseDateDetails) {
+    let rd = new Date(draft.releaseDate);
+    if (isNaN(rd)) {
+      draft.releaseDateDetails = [ { type: "text", text: draft.releaseDate } ];
+    }
+    else {
+      draft.releaseDateDetails = rd.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+    }
+  }
+  if (draft.date && !draft.dateDetails) {
+    draft.dateDetails = [ { type: "text", text: draft.date } ];
+  }
 
   // no comment...
   if (draft.isbn === "none")
@@ -753,9 +774,17 @@ for (let [i, item] of data.entries()) {
   if (item.Title.text.includes("†"))
     draft.exactPlacementUnknown = true;
 
-  // TODO: uncomment? "2022-??-??" is NaN tho.. // We're handling this on the client. Should we handle it here?
-  // if (isNaN(new Date(draft.releaseDate)))
-  // delete draft.releaseDate;
+  let unscuffedDate = unscuffDate(draft.releaseDate);
+  if (unscuffedDate === draft.releaseDate) {
+    draft.releaseDateEffective = unscuffedDate;
+  }
+  let d = new Date(draft.releaseDate);
+  if (isNaN(d) || d > Date.now()) {
+    draft.unreleased = true;
+  }
+  if (draft.releaseDate && isNaN(new Date(unscuffedDate))) {
+    log.error(`Release date format invalid for ${draft.title} Date: ${draft.releaseDate}`);
+  }
 
   // This usually happens for some yet to be release media like tv episodes
   if (!draft.title) {
@@ -844,6 +873,60 @@ for await (let page of pages) {
     draft.audiobook === true;
 
   fillDraftWithInfoboxData(draft, infobox);
+
+  const reduceAstToText = (acc, item) => {
+    switch (item.type) {
+      case "text":
+      case "note":
+        acc += item.text;
+        break;
+      case "list":
+        acc += _.flatten(item.data).reduce(reduceAstToText, "");
+        break;
+      case "internal link":
+      case "interwiki link":
+        acc += item.text ?? item.page;
+        break;
+      case "external link":
+        acc += item.text ?? item.site;
+        break;
+    }
+    return acc;
+  };
+
+  try {
+    if (draft.dateDetails) {
+      try {
+        draft.dateParsed = parseWookieepediaDate(draft.dateDetails.reduce(reduceAstToText, ""));
+      }
+      catch (e) {
+        if (e instanceof UnsupportedDateFormat) {
+          draft.dateParsed = parseWookieepediaDate(draft.date);
+        }
+        else {
+          throw e;
+        }
+      }
+    }
+    // if (draft.title === "Star Wars Adventures: Tales from Vader's Castle 3") {
+    // log.error(`Title: ${draft.title} REDUCE OUTPUT: ${draft.dateDetails.reduce(reduceAstToText, "")}`);
+    // log.error(draft.dateDetails);
+    // log.error(parseWookieepediaDate(draft.dateDetails.reduce(reduceAstToText, "")));
+    // }
+    else {
+      draft.dateParsed = parseWookieepediaDate(draft.date);
+    }
+  }
+  catch (e) {
+    if (e instanceof UnsupportedDateFormat) {
+      log.error(draft.title, e);
+    }
+    else {
+      throw e;
+    }
+  }
+
+  if (draft.dateParsed === undefined) delete draft.dateParsed;
 
   if (draft.series) {
     if (draft.type === "tv" && draft.series.length > 1) {

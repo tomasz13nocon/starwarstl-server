@@ -3,7 +3,7 @@ import cors from "cors";
 import { MongoClient } from  "mongodb";
 import compression from "compression";
 
-const API = "/api/"
+const API = "/api/";
 const app = express();
 
 app.use(cors());
@@ -39,7 +39,7 @@ try {
       };
       return data;
     }
-  }
+  };
 
   // app.get(`${API}test`, async (req, res) => {
   //   await new Promise(r => setTimeout(r, 2000));
@@ -48,12 +48,13 @@ try {
 
   app.get(`${API}media`, async (req, res) => {
     res.json(await cache("media", () => {
-      return db.collection("media").find({}, { projection: { title: 1, releaseDate: 1, type: 1, fullType: 1, writer: 1, chronology: 1, date: 1, /* episode: 1, season: 1, series: 1, cover: 1 */ } }).toArray()
+      return db.collection("media").find({}, { projection: { title: 1, releaseDate: 1, type: 1, fullType: 1, writer: 1, chronology: 1, date: 1, unreleased: 1, exactPlacementUnknown: 1 /* episode: 1, season: 1, series: 1, cover: 1 */ } }).toArray();
     }));
     // let media = await db.collection("media").find().limit(40).toArray();
   });
 
   app.get(`${API}media-details`, async (req, res) => {
+    // await new Promise((resolve) => setTimeout(resolve, 2000));
     res.json(await cache("media-details", () => db.collection("media").find().toArray()));
   });
 
