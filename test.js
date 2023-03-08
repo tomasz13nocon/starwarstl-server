@@ -4,9 +4,19 @@ import sharp from "sharp";
 import { MongoClient } from  "mongodb";
 import { decode } from "html-entities";
 import { S3Image } from "./s3Image.js";
+import wtf from "wtf_wikipedia";
 
-let image = new S3Image("17DarthVader.webp");
-console.log("exists: " + await image.exists());
+let doc = wtf(`*[[Bantha]] {{Mo}}
+*[[Insect]]
+**[[Flea]]
+***[[Lava flea]]
+*[[Kowakian monkey-lizard]] {{Flash}}
+*[[Spark-roach]] {{1stm}}
+*[[Xandank]] {{1st}}`);
+console.log(doc.lists());
+
+// let image = new S3Image("17DarthVader.webp");
+// console.log("exists: " + await image.exists());
 
 // console.log(decode("https://qwe.com/lol#xd"));
 
