@@ -1,3 +1,7 @@
+Main data fetching script is `fetch_timeline.js`
+
+---
+
 steps to update wtf:
 - make changes
 - npm run build
