@@ -19,15 +19,13 @@ try {
   console.log(" Connected!");
 
   let db = client.db("swtimeline");
-  let mediaCache, mediaTimestamp;
-  let mediaDetailsCache, mediaDetailsTimestamp;
   let cacheStore = {};
 
   const cache = async (name, missCb) => {
     let newTimestamp = await db.collection("meta").find().toArray();
     newTimestamp = newTimestamp[0].dataUpdateTimestamp;
     if (!newTimestamp)
-      console.error("UPDATE TIMESTAMP IS FALSEY!!!!");
+      console.error("Update timestamp is falsey!");
     if (newTimestamp && newTimestamp === cacheStore[name]?.timestamp) {
       return cacheStore[name].data;
     }
@@ -48,9 +46,24 @@ try {
 
   app.get(`${API}media`, async (req, res) => {
     res.json(await cache("media", () => {
-      return db.collection("media").find({}, { projection: { title: 1, releaseDate: 1, type: 1, fullType: 1, writer: 1, chronology: 1, date: 1, unreleased: 1, exactPlacementUnknown: 1 /* episode: 1, season: 1, series: 1, cover: 1 */ } }).toArray();
+      return db.collection("media").find({}, {
+        projection: {
+          title: 1,
+          releaseDate: 1,
+          type: 1,
+          fullType: 1,
+          writer: 1,
+          chronology: 1,
+          date: 1,
+          unreleased: 1,
+          exactPlacementUnknown: 1
+          // episode: 1,
+          // season: 1,
+          // series: 1,
+          // cover: 1
+        }
+      }).toArray();
     }));
-    // let media = await db.collection("media").find().limit(40).toArray();
   });
 
   app.get(`${API}media-details`, async (req, res) => {
@@ -59,7 +72,6 @@ try {
   });
 
   app.get(`${API}media-random`, async (req, res) => {
-    // Finn and Poe Team Up! (short story)
     res.json((await db.collection("media").aggregate([{ $sample: { size: 1 } }]).toArray())[0]);
   });
 
@@ -67,11 +79,6 @@ try {
     // TODO only titles
     res.json(await cache("series", () => db.collection("series").find().toArray()));
   });
-
-  // app.get(`${API}tv-images`, async (req, res) => {
-  //   let tvImages = await db.collection("tv-images").find().toArray();
-  //   res.json(tvImages);
-  // });
 
   // app.put("/media/:title", async (req, res) => {
   //   console.log(req.params.title);
@@ -82,7 +89,6 @@ try {
   //   let ins = await collection.findOneAndReplace({ title: req.params.title }, req.body, { upsert: true });
   //   res.json({ updatedExisting: ins.lastErrorObject.updatedExisting });
   // });
-
 
   app.listen(5000, () => {
     console.log("Server started on port 5000");

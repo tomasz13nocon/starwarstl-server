@@ -2,30 +2,18 @@
   "name": "server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.245.0",
-    "blurhash": "^2.0.4",
-    "buffer-image-size": "^0.6.4",
-    "cli-progress": "^3.10.0",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
-    "dotenv": "^16.0.3",
     "express": "^4.17.2",
-    "html-entities": "^2.3.2",
-    "lodash": "^4.17.21",
-    "log-with-statusbar": "^1.2.0",
-    "md5": "^2.3.0",
-    "mongodb": "^4.3.1",
-    "node-fetch-cache": "^3.0.3",
-    "sharp": "^0.30.2",
-    "wtf_wikipedia": "file:wtf_wikipedia"
+    "mongodb": "^4.3.1"
   },
   "devDependencies": {
     "eslint": "^8.32.0"

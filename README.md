@@ -1,9 +1,7 @@
-Main data fetching script is `fetch_timeline.js`
+# StarWarsTL: Express/MongoDB server
+Minimal API serving data obtained by the Wookieepedia script.
 
----
+## Rest of StarWarsTL
+Client: https://github.com/tomasz13nocon/starwarstl
+Wookieepedia script: https://github.com/tomasz13nocon/starwarstl-fetch
 
-steps to update wtf:
-- make changes
-- npm run build
-- update version in package.json
-- in here: npm update (locally *and* on the server)
