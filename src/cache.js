@@ -13,7 +13,7 @@ const getTimestamp = async () => {
 // Throws if meta.dataUpdateTimestamp is not set in DB
 export const cache = async (name, missCb) => {
   if (!cacheStore[name]) {
-    let timestamp = await getTimestamp(name);
+    let timestamp = await getTimestamp();
     let data = await missCb();
     cacheStore[name] = {
       timestamp,
@@ -23,7 +23,7 @@ export const cache = async (name, missCb) => {
   }
 
   // Validate cache asynchronously and return cached data
-  getTimestamp(name, missCb).then((timestamp) => {
+  getTimestamp().then((timestamp) => {
     if (!timestamp) {
       throw new Error("Update timestamp is falsey!");
     }
