@@ -13,5 +13,5 @@ export const getDatabase = async () => {
     console.log(" Connected!");
     connected = true;
   }
-  return client.db("swtimeline");
+  return client.db("starwarstl");
 };

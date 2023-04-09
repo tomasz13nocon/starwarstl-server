@@ -42,7 +42,6 @@ app.get(`${API}media`, async (req, res) => {
 });
 
 app.get(`${API}media-details`, async (req, res) => {
-  // await new Promise((resolve) => setTimeout(resolve, 2000)); // Test long response time
   res.json(
     await cache("media-details", () => db.collection("media").find().toArray())
   );
@@ -60,6 +59,7 @@ app.get(`${API}media-random`, async (req, res) => {
 });
 
 app.get(`${API}series`, async (req, res) => {
+  // await new Promise((resolve) => setTimeout(resolve, 2000)); // Test long response time
   // TODO only titles
   res.json(
     await cache("series", () => db.collection("series").find().toArray())
