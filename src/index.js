@@ -4,8 +4,10 @@ import compression from "compression";
 
 import { cache } from "./cache.js";
 import { getDatabase } from "./db.js";
+import { ObjectId } from "mongodb";
 
 const API = "/api/";
+const MEDIA = "media/";
 const app = express();
 
 app.use(cors());
@@ -43,8 +45,129 @@ app.get(`${API}media`, async (req, res) => {
 
 app.get(`${API}media-details`, async (req, res) => {
   res.json(
-    await cache("media-details", () => db.collection("media").find().toArray())
+    await cache("media-details", () =>
+      db
+        .collection("media")
+        .aggregate([
+          {
+            $set: {
+              hasAppearances: {
+                $cond: [{ $not: ["$appearances"] }, false, true],
+              },
+            },
+          },
+          {
+            $project: {
+              appearances: 0,
+            },
+          },
+        ])
+        .toArray()
+    )
   );
+});
+
+app.get(`${API}${MEDIA}:id`, async (req, res) => {
+  let oid;
+  try {
+    oid = ObjectId(req.params.id);
+  } catch (e) {
+    res.status(400).send("Invalid ID");
+    return;
+  }
+  let doc = await cache(`${MEDIA}${req.params.id}`, () =>
+    db.collection("media").findOne(oid)
+  );
+
+  if (doc) {
+    res.json(doc);
+  } else {
+    res.sendStatus(404);
+  }
+});
+
+app.get(`${API}${MEDIA}:id/:field`, async (req, res) => {
+  // let oid;
+  // try {
+  //   oid = ObjectId(req.params.id);
+  // } catch (e) {
+  //   res.status(400).send("Invalid ID");
+  //   return;
+  // }
+  if (isNaN(+req.params.id)) {
+    res.status(400).send("Invalid ID");
+    return;
+  }
+  let doc = await cache(`${MEDIA}${req.params.id}${req.params.field}`, () =>
+    db
+      .collection("media")
+      .findOne(
+        { _id: +req.params.id },
+        { projection: { [req.params.field]: 1 } }
+      )
+  );
+
+  if (doc) {
+    if (doc[req.params.field] === undefined) {
+      res.sendStatus(404);
+    } else {
+      res.json(doc[req.params.field]);
+    }
+  } else {
+    res.sendStatus(404);
+  }
+});
+
+app.get(`${API}appearances/:type`, async (req, res) => {
+  let colls = await db
+    .listCollections({ name: req.params.type }, { nameOnly: true })
+    .toArray();
+  if (!colls.length) {
+    console.log(`Invalid collection ${req.params.type}`);
+    res.sendStatus(404);
+    return;
+  }
+
+  if (req.query.s) {
+    let appearances = await db
+      .collection(req.params.type)
+      .find({ $text: { $search: req.query.s } })
+      .toArray();
+
+    res.json(appearances);
+    return;
+  }
+
+  res.json(
+    await cache(`appearances-${req.params.type}`, () =>
+      db
+        .collection(req.params.type)
+        .find({}, { projection: { _id: 0 } })
+        .toArray()
+    )
+  );
+});
+
+app.get(`${API}appearances/:type/:name`, async (req, res) => {
+  let colls = await db
+    .listCollections({ name: req.params.type }, { nameOnly: true })
+    .toArray();
+  if (!colls.length) {
+    console.log(`Invalid collection ${req.params.type}`);
+    res.sendStatus(404);
+    return;
+  }
+
+  let appearances = await db
+    .collection(req.params.type)
+    .findOne({ name: req.params.name });
+
+  if (!appearances) {
+    res.sendStatus(404);
+    return;
+  }
+
+  res.json(appearances.media);
 });
 
 app.get(`${API}media-random`, async (req, res) => {
@@ -59,7 +182,6 @@ app.get(`${API}media-random`, async (req, res) => {
 });
 
 app.get(`${API}series`, async (req, res) => {
-  // await new Promise((resolve) => setTimeout(resolve, 2000)); // Test long response time
   // TODO only titles
   res.json(
     await cache("series", () => db.collection("series").find().toArray())
