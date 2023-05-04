@@ -13,11 +13,12 @@
     "compression": "^1.7.4",
     "cors": "^2.8.5",
     "express": "^4.17.2",
-    "mongodb": "^4.3.1"
+    "mongodb": "^4.3.1",
+    "redis": "^4.6.6"
   },
   "devDependencies": {
-    "prettier": "^2.8.7",
     "eslint": "^8.32.0",
-    "eslint-config-prettier": "^8.8.0"
+    "eslint-config-prettier": "^8.8.0",
+    "prettier": "^2.8.7"
   }
 }

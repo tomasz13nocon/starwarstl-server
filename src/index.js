@@ -4,7 +4,6 @@ import compression from "compression";
 
 import { cache } from "./cache.js";
 import { getDatabase } from "./db.js";
-import { ObjectId } from "mongodb";
 
 const API = "/api/";
 const MEDIA = "media/";
@@ -50,6 +49,7 @@ app.get(`${API}media-details`, async (req, res) => {
         .collection("media")
         .aggregate([
           {
+            // TODO move this to fetch
             $set: {
               hasAppearances: {
                 $cond: [{ $not: ["$appearances"] }, false, true],
@@ -67,17 +67,19 @@ app.get(`${API}media-details`, async (req, res) => {
   );
 });
 
+app.get(`${API}series`, async (req, res) => {
+  // TODO only titles
+  res.json(
+    await cache("series", () => db.collection("series").find().toArray())
+  );
+});
+
 app.get(`${API}${MEDIA}:id`, async (req, res) => {
-  let oid;
-  try {
-    oid = ObjectId(req.params.id);
-  } catch (e) {
+  if (isNaN(+req.params.id)) {
     res.status(400).send("Invalid ID");
     return;
   }
-  let doc = await cache(`${MEDIA}${req.params.id}`, () =>
-    db.collection("media").findOne(oid)
-  );
+  let doc = db.collection("media").findOne({ _id: +req.params.id });
 
   if (doc) {
     res.json(doc);
@@ -87,25 +89,16 @@ app.get(`${API}${MEDIA}:id`, async (req, res) => {
 });
 
 app.get(`${API}${MEDIA}:id/:field`, async (req, res) => {
-  // let oid;
-  // try {
-  //   oid = ObjectId(req.params.id);
-  // } catch (e) {
-  //   res.status(400).send("Invalid ID");
-  //   return;
-  // }
   if (isNaN(+req.params.id)) {
     res.status(400).send("Invalid ID");
     return;
   }
-  let doc = await cache(`${MEDIA}${req.params.id}${req.params.field}`, () =>
-    db
-      .collection("media")
-      .findOne(
-        { _id: +req.params.id },
-        { projection: { [req.params.field]: 1 } }
-      )
-  );
+  let doc = await db
+    .collection("media")
+    .findOne(
+      { _id: +req.params.id },
+      { projection: { [req.params.field]: 1 } }
+    );
 
   if (doc) {
     if (doc[req.params.field] === undefined) {
@@ -178,13 +171,6 @@ app.get(`${API}media-random`, async (req, res) => {
         .aggregate([{ $sample: { size: 1 } }])
         .toArray()
     )[0]
-  );
-});
-
-app.get(`${API}series`, async (req, res) => {
-  // TODO only titles
-  res.json(
-    await cache("series", () => db.collection("series").find().toArray())
   );
 });
 
