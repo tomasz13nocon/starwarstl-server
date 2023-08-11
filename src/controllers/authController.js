@@ -1,117 +1,138 @@
 import { LuciaError } from "lucia";
-import { auth } from "../lucia.js";
+import {
+  auth,
+  generateEmailVerificationToken,
+  sendEmailVerificationLink,
+  validateEmailVerificationToken,
+} from "../auth.js";
+import { TokenError } from "../auth.js";
 
-export const signup = async (req, res) => {
-  const { username, password } = req.body;
+const createSession = async (req, res, userId) => {
+  const session = await auth.createSession({
+    userId,
+    attributes: {},
+  });
+  const authRequest = auth.handleRequest(req, res);
+  authRequest.setSession(session);
+};
 
-  if (
-    typeof username !== "string" ||
-    username.length < 4 ||
-    username.length > 63
-  ) {
-    return res.status(400).send("Invalid username");
+export const signup = async (req, res, next) => {
+  const { email, password } = req.body;
+
+  if (typeof email !== "string") {
+    return res.json({ error: "Invalid email" });
   }
   if (typeof password !== "string" || password.length < 6) {
-    return res.status(400).send("Invalid password");
+    return res.json({ error: "Invalid password" });
   }
+  // TODO check if email valid
   try {
     const user = await auth.createUser({
       key: {
-        providerId: "username", // auth method
-        providerUserId: username.toLowerCase(), // unique id when using "username" auth method
+        providerId: "email",
+        providerUserId: email.toLowerCase(), // TODO does this have unique constraint?
         password, // hashed by Lucia
       },
       attributes: {
-        username,
+        email,
+        emailVerified: false,
         createdAt: new Date(),
       },
     });
-    const session = await auth.createSession({
-      userId: user.userId,
-      attributes: {},
-    });
-    const authRequest = auth.handleRequest(req, res);
-    authRequest.setSession(session);
-    console.log(session);
-    // return res.status(302).setHeader("Location", "/").end();
-    return res.sendStatus(200);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("E11000")) {
-      return res.status(400).send("Username already taken");
-    }
 
-    return res.status(500).send("An unknown error occurred");
+    const token = await generateEmailVerificationToken(user.userId);
+    await sendEmailVerificationLink(email, token);
+
+    await createSession(req, res, user.userId);
+    return res.json({ email });
+  } catch (e) {
+    if (
+      e instanceof LuciaError &&
+      e.message.includes("AUTH_DUPLICATE_KEY_ID")
+    ) {
+      return res.json({ error: "Email already taken" });
+    }
+    next(e);
   }
 };
 
-export const login = async (req, res) => {
-  const { username, password } = req.body;
+export const login = async (req, res, next) => {
+  const { email, password } = req.body;
 
-  if (
-    typeof username !== "string" ||
-    username.length < 1 ||
-    username.length > 63
-  ) {
-    return res.status(400).send("Invalid username");
+  if (typeof email !== "string") {
+    return res.json({ error: "Invalid email" });
   }
-  if (
-    typeof password !== "string" ||
-    password.length < 1 ||
-    password.length > 255
-  ) {
-    return res.status(400).send("Invalid password");
+  if (typeof password !== "string" || password.length < 6) {
+    return res.json({ error: "Invalid password" });
   }
   try {
-    // find user by key
-    // and validate password
-    const user = await auth.useKey(
-      "username",
-      username.toLowerCase(),
-      password
-    );
-    const session = await auth.createSession({
-      userId: user.userId,
-      attributes: {},
-    });
-    const authRequest = auth.handleRequest(req, res);
-    authRequest.setSession(session);
-    return res.sendStatus(200);
+    const user = await auth.useKey("email", email.toLowerCase(), password);
+    await createSession(req, res, user.userId);
+    return res.json({ email });
   } catch (e) {
-    // check for unique constraint error in user table
     if (
       e instanceof LuciaError &&
       (e.message === "AUTH_INVALID_KEY_ID" ||
         e.message === "AUTH_INVALID_PASSWORD")
     ) {
-      // user does not exist
-      // or invalid password
-      return res.status(400).send("Incorrect username or password");
+      return res.json({ error: "Incorrect email or password" });
     }
-
-    return res.status(500).send("An unknown error occurred");
+    next(e);
   }
 };
 
 export const logout = async (req, res) => {
   const authRequest = auth.handleRequest(req, res);
-  const session = await authRequest.validate(); // or `authRequest.validateBearerToken()`
+  const session = await authRequest.validate();
   if (!session) {
-    return res.sendStatus(401);
+    return res.json(null);
   }
   await auth.invalidateSession(session.sessionId);
-
-  authRequest.setSession(null); // for session cookie
-
-  return res.status(302).setHeader("Location", "/").end();
+  authRequest.setSession(null);
+  return res.json(null);
 };
 
 export const getUser = async (req, res) => {
   const authRequest = auth.handleRequest(req, res);
-  const session = await authRequest.validate(); // or `authRequest.validateBearerToken()`
+  const session = await authRequest.validate();
   if (session) {
-    const user = session.user;
-    const username = user.username;
-    return res.json({ user, username });
+    // TODO extend session
+    const email = session.user.email;
+    return res.json({ email });
   }
-  return res.sendStatus(401);
+  return res.json(null);
+};
+
+export const sendEmailVerification = async (req, res) => {
+  const authRequest = auth.handleRequest(req, res);
+  const session = await authRequest.validate();
+  if (!session) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
+  if (session.user.emailVerified) {
+    return res.json({ error: "Email already verified" }); // TODO error?
+  }
+
+  const token = await generateEmailVerificationToken(session.user.userId);
+  await sendEmailVerificationLink(session.user.email, token);
+  return res.json(null);
+};
+
+export const verifyEmail = async (req, res, next) => {
+  const token = req.params.token;
+  try {
+    const userId = await validateEmailVerificationToken(token);
+    const user = await auth.getUser(userId);
+    await auth.invalidateAllUserSessions(user.userId);
+    await auth.updateUserAttributes(user.userId, {
+      email_verified: true,
+    });
+    await createSession(req, res, user.userId);
+    return res.json({ email: user.email });
+  } catch (e) {
+    if (e instanceof TokenError) {
+      return res.json({ error: e.message });
+    }
+    next(e);
+  }
 };

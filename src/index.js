@@ -1,9 +1,8 @@
 import express from "express";
 import cors from "cors";
 import compression from "compression";
-
-import { auth } from "./lucia.js";
-
+import "dotenv/config";
+import { auth } from "./auth.js";
 import {
   getMedia,
   getMediaField,
@@ -15,7 +14,9 @@ import {
   getUser,
   login,
   logout,
+  sendEmailVerification,
   signup,
+  verifyEmail,
 } from "./controllers/authController.js";
 import {
   getAppearance,
@@ -26,7 +27,6 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded());
 app.use(compression());
 app.use((req, res, next) => {
   res.locals.auth = auth.handleRequest(req, res);
@@ -47,6 +47,8 @@ authRouter.post("/signup", signup);
 authRouter.post("/login", login);
 authRouter.post("/logout", logout);
 authRouter.get("/user", getUser);
+authRouter.post("/email-verification", sendEmailVerification);
+authRouter.get("/email-verification/:token", verifyEmail);
 
 appearancesRouter.get("/:type", getAppearances);
 appearancesRouter.get("/:type/:name", getAppearance);
@@ -55,6 +57,15 @@ app.use("/api", router);
 app.use("/api/auth", authRouter);
 app.use("/api/appearances", appearancesRouter);
 
-app.listen(5000, () => {
-  console.log("Server started on port 5000");
+// app.get("/api/test/:qwe", (req, res) => {
+// });
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: err.message ?? "An unknown error occurred" });
+});
+
+const PORT = 5000;
+app.listen(PORT, () => {
+  console.log(`Server started on port ${PORT}`);
 });
