@@ -34,7 +34,7 @@ export const mongodb = (db) => {
       await users.deleteOne({ _id: userId });
     },
     updateUser: async (userId, partialUser) => {
-      await users.updateOne({ _id: userId }, partialUser);
+      await users.updateOne({ _id: userId }, { $set: partialUser });
     },
 
     getSession: async (sessionId) => {
@@ -103,7 +103,7 @@ export const mongodb = (db) => {
       if (!sessions) {
         throw new Error("Session collection not defined");
       }
-      await sessions.updateOne({ _id: sessionId }, partialSession);
+      await sessions.updateOne({ _id: sessionId }, { $set: partialSession });
     },
 
     getKey: async (keyId) => {
@@ -136,7 +136,7 @@ export const mongodb = (db) => {
       });
     },
     updateKey: async (keyId, partialKey) => {
-      await keys.updateOne({ _id: keyId }, partialKey);
+      await keys.updateOne({ _id: keyId }, { $set: partialKey });
     },
   });
 };
