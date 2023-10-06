@@ -7,6 +7,13 @@ import {
 } from "../auth.js";
 import { TokenError } from "../auth.js";
 
+const getUserFrontendValues = (sessionUser) => {
+  const { email, emailVerified } = sessionUser;
+  let rv = { email };
+  if (!emailVerified) rv.emailUnverified = true;
+  return rv;
+};
+
 const createSession = async (req, res, userId) => {
   const session = await auth.createSession({
     userId,
@@ -44,7 +51,7 @@ export const signup = async (req, res, next) => {
     await sendEmailVerificationLink(email, token);
 
     await createSession(req, res, user.userId);
-    return res.json({ email });
+    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
   } catch (e) {
     if (
       e instanceof LuciaError &&
@@ -68,7 +75,7 @@ export const login = async (req, res, next) => {
   try {
     const user = await auth.useKey("email", email.toLowerCase(), password);
     await createSession(req, res, user.userId);
-    return res.json({ email });
+    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
   } catch (e) {
     if (
       e instanceof LuciaError &&
@@ -96,9 +103,7 @@ export const getUser = async (req, res) => {
   const authRequest = auth.handleRequest(req, res);
   const session = await authRequest.validate();
   if (session) {
-    // TODO extend session
-    const email = session.user.email;
-    return res.json({ email });
+    return res.json(getUserFrontendValues(session.user));
   }
   return res.json(null);
 };
@@ -125,10 +130,10 @@ export const verifyEmail = async (req, res, next) => {
     const user = await auth.getUser(userId);
     await auth.invalidateAllUserSessions(user.userId);
     await auth.updateUserAttributes(user.userId, {
-      email_verified: true,
+      emailVerified: true,
     });
     await createSession(req, res, user.userId);
-    return res.json({ email: user.email });
+    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
   } catch (e) {
     if (e instanceof TokenError) {
       return res.json({ error: e.message });

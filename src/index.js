@@ -9,6 +9,8 @@ import {
   getMediaRandom,
   getAllSeries,
   getAllMedia,
+  getWatched,
+  addToWatched,
 } from "./controllers/mediaController.js";
 import {
   getUser,
@@ -42,6 +44,8 @@ router.get("/media/:id", getMedia);
 router.get("/media/:id/:field", getMediaField);
 router.get("/media-random", getMediaRandom);
 router.get("/series", getAllSeries);
+router.get("/watched", getWatched);
+router.post("/watched", addToWatched);
 
 authRouter.post("/signup", signup);
 authRouter.post("/login", login);
@@ -57,7 +61,7 @@ app.use("/api", router);
 app.use("/api/auth", authRouter);
 app.use("/api/appearances", appearancesRouter);
 
-// app.get("/api/test/:qwe", (req, res) => {
+// app.get("/api/test/", (req, res) => {
 // });
 
 app.use((err, req, res, next) => {

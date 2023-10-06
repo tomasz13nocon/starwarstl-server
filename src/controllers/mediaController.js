@@ -1,5 +1,7 @@
+import { auth } from "../auth.js";
 import { cache } from "../cache.js";
 import { getDatabase } from "../db.js";
+import { authenticate } from "./common.js";
 
 let db = await getDatabase();
 
@@ -25,10 +27,10 @@ export const getAllMedia = async (req, res) => {
                 unreleased: 1,
                 exactPlacementUnknown: 1,
               },
-            }
+            },
           )
           .toArray();
-      })
+      }),
     );
   } else {
     res.json(
@@ -50,8 +52,8 @@ export const getAllMedia = async (req, res) => {
               },
             },
           ])
-          .toArray()
-      )
+          .toArray(),
+      ),
     );
   }
 };
@@ -103,13 +105,54 @@ export const getMediaRandom = async (req, res) => {
         .collection("media")
         .aggregate([{ $sample: { size: 1 } }])
         .toArray()
-    )[0]
+    )[0],
   );
 };
 
 export const getAllSeries = async (req, res) => {
   // TODO only titles
   res.json(
-    await cache("series", () => db.collection("series").find().toArray())
+    await cache("series", () => db.collection("series").find().toArray()),
   );
+};
+
+export const getWatched = async (req, res) => {
+  let session = await authenticate(req, res);
+  console.log(session);
+
+  let result = await db
+    .collection("lists")
+    .aggregate([
+      {
+        $lookup: {
+          from: "media",
+          localField: "media",
+          foreignField: "_id",
+          as: "mediaDetails",
+        },
+      },
+    ])
+    .toArray();
+
+  res.json(result);
+};
+
+export const addToWatched = async (req, res) => {
+  let session = await authenticate(req, res);
+  if (!session) {
+    return res.sendStatus(401);
+  }
+  let { pageid } = req.body;
+
+  //TODO validation
+
+  await db
+    .collection("lists")
+    .updateOne(
+      { userId: session.user.userId, name: "__watched" },
+      { $addToSet: { media: pageid } },
+      { upsert: true },
+    );
+  // TODO maybe say if already in the list (modifiedCount === 1)
+  res.sendStatus(200);
 };

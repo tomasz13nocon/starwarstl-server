@@ -47,7 +47,7 @@ export const mongodb = (db) => {
       if (!sessions) {
         throw new Error("Session collection not defined");
       }
-      const foundSessions = await sessions.find({ user_id: userId });
+      const foundSessions = await sessions.find({ userId: userId });
       return foundSessions.map((val) => transformDoc(val));
     },
     getSessionAndUserBySessionId: async (sessionId) => {
@@ -60,7 +60,7 @@ export const mongodb = (db) => {
         {
           $lookup: {
             from: "users", // TODO parametrize
-            localField: "user_id",
+            localField: "userId",
             // Relies on _id being a String, not ObjectId.
             // But this assumption is used elsewhere, as well
             foreignField: "_id",
@@ -97,7 +97,7 @@ export const mongodb = (db) => {
       if (!sessions) {
         throw new Error("Session collection not defined");
       }
-      await sessions.deleteMany({ user_id: userId });
+      await sessions.deleteMany({ userId });
     },
     updateSession: async (sessionId, partialSession) => {
       if (!sessions) {
@@ -124,7 +124,7 @@ export const mongodb = (db) => {
       }
     },
     getKeysByUserId: async (userId) => {
-      const keyDocs = await keys.find({ user_id: userId });
+      const keyDocs = await keys.find({ userId: userId });
       return keyDocs.map((val) => transformDoc(val));
     },
     deleteKey: async (keyId) => {
@@ -132,7 +132,7 @@ export const mongodb = (db) => {
     },
     deleteKeysByUserId: async (userId) => {
       await keys.deleteMany({
-        user_id: userId,
+        userId: userId,
       });
     },
     updateKey: async (keyId, partialKey) => {

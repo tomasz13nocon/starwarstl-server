@@ -3,6 +3,7 @@ import { express } from "lucia/middleware";
 import { generateRandomString, isWithinExpiration } from "lucia/utils";
 import { mongodb } from "./adapter-mongodb.js";
 import { getDatabase, startSession } from "./db.js";
+import { env } from "./global.js";
 import nodemailer from "nodemailer";
 
 let db = await getDatabase();
@@ -18,6 +19,7 @@ export const auth = lucia({
   env: process.env.NODE_ENV === "development" ? "DEV" : "PROD",
   middleware: express(),
   adapter: mongodb(db),
+  csrfProtection: env !== "dev",
 
   getUserAttributes: ({ email, emailVerified, createdAt }) => {
     return {
@@ -53,11 +55,9 @@ export const validateEmailVerificationToken = async (token) => {
   const tokensColl = db.collection("emailVerificationTokens");
   const session = await startSession();
   let storedToken;
-  console.log("validating token " + token);
   try {
     await session.withTransaction(async () => {
       storedToken = await tokensColl.findOne({ token }, { session });
-      console.log("stored token: " + JSON.stringify(storedToken));
       if (!storedToken) throw new TokenError("Invalid verification token");
       await tokensColl.deleteMany({ userId: storedToken.userId }, { session });
     });
@@ -68,14 +68,16 @@ export const validateEmailVerificationToken = async (token) => {
   const tokenExpires = Number(storedToken.expires); // TODO types
   if (!isWithinExpiration(tokenExpires)) {
     throw new TokenError(
-      "Expired verification token. Please log in and request a new one."
+      "Expired verification token. Please log in and request a new one.",
     );
   }
-  return storedToken.user_id;
+  return storedToken.userId;
 };
 
 export const sendEmailVerificationLink = async (email, token) => {
-  const url = `http://localhost:3000/email-verification/${token}`;
+  const url = `${
+    env === "prod" ? "https://starwarstl.com/" : "http://localhost:8080/"
+  }email-verification/${token}`;
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
     port: 465,
@@ -89,7 +91,9 @@ export const sendEmailVerificationLink = async (email, token) => {
     from: process.env.MAILBOT_FROM,
     to: email,
     subject: "Verify your email",
-    text: `Click this link to verify your email: ${url}`,
+    text: `You have created an account on https://starwarstl.com.
+
+Click this link to verify your email: ${url}`,
   });
   if (info.rejected.length > 0) {
     throw new Error("Failed to send email, response: " + info.response);
