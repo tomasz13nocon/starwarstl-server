@@ -1,6 +1,6 @@
 import { auth } from "../auth.js";
 import { cache } from "../cache.js";
-import { getDatabase } from "../db.js";
+import { getDatabase, watchedName, watchlistName } from "../db.js";
 import { authenticate } from "./common.js";
 
 let db = await getDatabase();
@@ -116,31 +116,43 @@ export const getAllSeries = async (req, res) => {
   );
 };
 
+export const getUserLists = async (req, res) => {
+  let session = await authenticate(req, res);
+  if (!session) {
+    return res.sendStatus(401);
+  }
+
+  let lists = await db
+    .collection("lists")
+    .find({ userId: session.user.userId })
+    .toArray();
+  console.log(lists);
+  res.json(lists);
+};
+
 export const getWatched = async (req, res) => {
   let session = await authenticate(req, res);
   console.log(session);
 
   let result = await db
     .collection("lists")
-    .aggregate([
-      {
-        $lookup: {
-          from: "media",
-          localField: "media",
-          foreignField: "_id",
-          as: "mediaDetails",
-        },
-      },
-    ])
-    .toArray();
+    .findOne({ userId: session.user.userId, name: watchedName });
 
   res.json(result);
 };
 
 export const addToWatched = async (req, res) => {
+  addToList(req, res, watchedName);
+};
+
+export const addToWatchlist = async (req, res) => {
+  addToList(req, res, watchlistName);
+};
+
+export const addToList = async (req, res, name) => {
   let session = await authenticate(req, res);
   if (!session) {
-    return res.sendStatus(401);
+    return res.status(401).json({ error: "Not logged in" });
   }
   let { pageid } = req.body;
 
@@ -149,10 +161,34 @@ export const addToWatched = async (req, res) => {
   await db
     .collection("lists")
     .updateOne(
-      { userId: session.user.userId, name: "__watched" },
-      { $addToSet: { media: pageid } },
+      { userId: session.user.userId, name },
+      { $addToSet: { items: pageid } },
       { upsert: true },
     );
-  // TODO maybe say if already in the list (modifiedCount === 1)
-  res.sendStatus(200);
+  // TODO maybe detec if already was in the list (modifiedCount === 1)
+  res.status(200).json({});
+};
+
+export const removeFromWatched = async (req, res) => {
+  removeFromList(req, res, watchedName);
+};
+
+export const removeFromWatchlist = async (req, res) => {
+  removeFromList(req, res, watchlistName);
+};
+
+export const removeFromList = async (req, res, name) => {
+  let session = await authenticate(req, res);
+  if (!session) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
+  let { id } = req.params;
+  id = +id;
+
+  //TODO validation
+
+  let result = await db
+    .collection("lists")
+    .updateOne({ userId: session.user.userId, name }, { $pull: { items: id } });
+  res.status(200).json({});
 };

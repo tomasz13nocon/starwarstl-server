@@ -6,10 +6,26 @@ import {
   validateEmailVerificationToken,
 } from "../auth.js";
 import { TokenError } from "../auth.js";
+import { getDatabase, watchedName, watchlistName } from "../db.js";
 
-const getUserFrontendValues = (sessionUser) => {
+let db = await getDatabase();
+
+const getUserFrontendValues = async (sessionUser) => {
   const { email, emailVerified } = sessionUser;
-  let rv = { email };
+  let lists = await db
+    .collection("lists")
+    .find({ userId: sessionUser.userId })
+    .toArray();
+  let rv = {
+    email,
+    lists: {
+      watched: lists.find((list) => list.name === watchedName)?.items ?? [],
+      watchlist: lists.find((list) => list.name === watchlistName)?.items ?? [],
+      custom: lists
+        .filter((list) => !list.name.startsWith("__"))
+        .map((list) => list.items),
+    },
+  };
   if (!emailVerified) rv.emailUnverified = true;
   return rv;
 };
@@ -51,7 +67,9 @@ export const signup = async (req, res, next) => {
     await sendEmailVerificationLink(email, token);
 
     await createSession(req, res, user.userId);
-    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
+    return res.json(
+      await getUserFrontendValues(await auth.getUser(user.userId)),
+    );
   } catch (e) {
     if (
       e instanceof LuciaError &&
@@ -75,7 +93,9 @@ export const login = async (req, res, next) => {
   try {
     const user = await auth.useKey("email", email.toLowerCase(), password);
     await createSession(req, res, user.userId);
-    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
+    return res.json(
+      await getUserFrontendValues(await auth.getUser(user.userId)),
+    );
   } catch (e) {
     if (
       e instanceof LuciaError &&
@@ -103,7 +123,7 @@ export const getUser = async (req, res) => {
   const authRequest = auth.handleRequest(req, res);
   const session = await authRequest.validate();
   if (session) {
-    return res.json(getUserFrontendValues(session.user));
+    return res.json(await getUserFrontendValues(session.user));
   }
   return res.json(null);
 };
@@ -133,7 +153,9 @@ export const verifyEmail = async (req, res, next) => {
       emailVerified: true,
     });
     await createSession(req, res, user.userId);
-    return res.json(getUserFrontendValues(await auth.getUser(user.userId)));
+    return res.json(
+      await getUserFrontendValues(await auth.getUser(user.userId)),
+    );
   } catch (e) {
     if (e instanceof TokenError) {
       return res.json({ error: e.message });

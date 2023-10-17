@@ -11,6 +11,10 @@ import {
   getAllMedia,
   getWatched,
   addToWatched,
+  getUserLists,
+  addToWatchlist,
+  removeFromWatched,
+  removeFromWatchlist,
 } from "./controllers/mediaController.js";
 import {
   getUser,
@@ -44,8 +48,11 @@ router.get("/media/:id", getMedia);
 router.get("/media/:id/:field", getMediaField);
 router.get("/media-random", getMediaRandom);
 router.get("/series", getAllSeries);
-router.get("/watched", getWatched);
+router.get("/me/lists", getUserLists);
 router.post("/watched", addToWatched);
+router.delete("/watched/:id", removeFromWatched);
+router.post("/watchlist", addToWatchlist);
+router.delete("/watchlist/:id", removeFromWatchlist);
 
 authRouter.post("/signup", signup);
 authRouter.post("/login", login);
