@@ -1,9 +1,7 @@
-import { lucia } from "lucia";
-import { express } from "lucia/middleware";
-import { generateRandomString, isWithinExpiration } from "lucia/utils";
-import { mongodb } from "./adapter-mongodb.js";
+import { Lucia } from "lucia";
+import { MongodbAdapter } from "@lucia-auth/adapter-mongodb";
 import { getDatabase, startSession } from "./db.js";
-import { env } from "./global.js";
+import { prod } from "./global.js";
 import nodemailer from "nodemailer";
 
 let db = await getDatabase();
@@ -15,12 +13,17 @@ export class TokenError extends Error {
   }
 }
 
-export const auth = lucia({
-  env: process.env.NODE_ENV === "development" ? "DEV" : "PROD",
-  middleware: express(),
-  adapter: mongodb(db),
-  csrfProtection: env !== "dev",
+const adapter = new MongodbAdapter(
+  db.collection("sessions"),
+  db.collection("users"),
+);
 
+export const auth = new Lucia(adapter, {
+  sessionCookie: {
+    attributes: {
+      secure: prod,
+    },
+  },
   getUserAttributes: ({ email, emailVerified, createdAt }) => {
     return {
       email,
@@ -76,7 +79,7 @@ export const validateEmailVerificationToken = async (token) => {
 
 export const sendEmailVerificationLink = async (email, token) => {
   const url = `${
-    env === "prod" ? "https://starwarstl.com/" : "http://localhost:8080/"
+    prod ? "https://starwarstl.com/" : "http://localhost:8080/"
   }email-verification/${token}`;
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",

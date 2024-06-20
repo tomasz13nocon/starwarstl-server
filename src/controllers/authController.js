@@ -1,4 +1,5 @@
-import { LuciaError } from "lucia";
+import { generateIdFromEntropySize } from "lucia";
+import { Argon2id } from "oslo/password";
 import {
   auth,
   generateEmailVerificationToken,
@@ -11,13 +12,13 @@ import { getDatabase, watchedName, watchlistName } from "../db.js";
 let db = await getDatabase();
 
 const getUserFrontendValues = async (sessionUser) => {
-  const { email, emailVerified } = sessionUser;
   let lists = await db
     .collection("lists")
-    .find({ userId: sessionUser.userId })
+    // This might be a lucia user obj or mongodb user obj, so try both ID names
+    .find({ userId: sessionUser.id ?? sessionUser._id })
     .toArray();
   let rv = {
-    email,
+    email: sessionUser.email,
     lists: {
       watched: lists.find((list) => list.name === watchedName)?.items ?? [],
       watchlist: lists.find((list) => list.name === watchlistName)?.items ?? [],
@@ -26,104 +27,93 @@ const getUserFrontendValues = async (sessionUser) => {
         .map((list) => list.items),
     },
   };
-  if (!emailVerified) rv.emailUnverified = true;
+  if (!sessionUser.emailVerified) rv.emailUnverified = true;
   return rv;
 };
 
-const createSession = async (req, res, userId) => {
-  const session = await auth.createSession({
-    userId,
-    attributes: {},
-  });
-  const authRequest = auth.handleRequest(req, res);
-  authRequest.setSession(session);
+const createSession = async (res, userId) => {
+  const session = await auth.createSession(userId, {});
+  res.appendHeader(
+    "Set-Cookie",
+    auth.createSessionCookie(session.id).serialize(),
+  );
+  return session;
 };
 
 export const signup = async (req, res, next) => {
   const { email, password } = req.body;
 
-  if (typeof email !== "string") {
+  if (typeof email !== "string" || !/.+@.+\..+/.test(email)) {
     return res.json({ error: "Invalid email" });
   }
   if (typeof password !== "string" || password.length < 6) {
     return res.json({ error: "Invalid password" });
   }
-  // TODO check if email valid
+
+  const passwordHash = await new Argon2id().hash(password);
+
   try {
-    const user = await auth.createUser({
-      key: {
-        providerId: "email",
-        providerUserId: email.toLowerCase(), // TODO does this have unique constraint?
-        password, // hashed by Lucia
-      },
-      attributes: {
-        email,
-        emailVerified: false,
-        createdAt: new Date(),
-      },
-    });
+    const user = {
+      email,
+      emailVerified: false,
+      createdAt: new Date(),
+      passwordHash,
+    };
+    const { insertedId: userId } = await db.collection("users").insertOne(user);
+    user.id = userId;
 
-    const token = await generateEmailVerificationToken(user.userId);
-    await sendEmailVerificationLink(email, token);
+    // const token = await generateEmailVerificationToken(id);
+    // TODO no need to await
+    // await sendEmailVerificationLink(email, token);
 
-    await createSession(req, res, user.userId);
-    return res.json(
-      await getUserFrontendValues(await auth.getUser(user.userId)),
-    );
+    await createSession(res, userId);
+
+    return res.json(await getUserFrontendValues(user));
   } catch (e) {
-    if (
-      e instanceof LuciaError &&
-      e.message.includes("AUTH_DUPLICATE_KEY_ID")
-    ) {
-      return res.json({ error: "Email already taken" });
-    }
-    next(e);
+    if (e.code === 11000) return res.json({ error: "Email already taken" });
+    else return next(e);
   }
 };
 
 export const login = async (req, res, next) => {
   const { email, password } = req.body;
 
+  // TODO create verifyEmail and pw functions, code above
   if (typeof email !== "string") {
     return res.json({ error: "Invalid email" });
   }
   if (typeof password !== "string" || password.length < 6) {
     return res.json({ error: "Invalid password" });
   }
-  try {
-    const user = await auth.useKey("email", email.toLowerCase(), password);
-    await createSession(req, res, user.userId);
-    return res.json(
-      await getUserFrontendValues(await auth.getUser(user.userId)),
-    );
-  } catch (e) {
-    if (
-      e instanceof LuciaError &&
-      (e.message === "AUTH_INVALID_KEY_ID" ||
-        e.message === "AUTH_INVALID_PASSWORD")
-    ) {
-      return res.json({ error: "Incorrect email or password" });
-    }
-    next(e);
+
+  const user = await db.collection("users").findOne({ email });
+  if (user === null) {
+    return res.json({ error: "Incorrect email or password" });
   }
+
+  const validPassword = await new Argon2id().verify(
+    user.passwordHash,
+    password,
+  );
+  if (!validPassword) {
+    return res.json({ error: "Incorrect email or password" });
+  }
+
+  await createSession(res, user._id);
+  return res.json(await getUserFrontendValues(user));
 };
 
 export const logout = async (req, res) => {
-  const authRequest = auth.handleRequest(req, res);
-  const session = await authRequest.validate();
-  if (!session) {
+  if (!res.locals.session) {
     return res.json(null);
   }
-  await auth.invalidateSession(session.sessionId);
-  authRequest.setSession(null);
+  await auth.invalidateSession(res.locals.session.id);
   return res.json(null);
 };
 
 export const getUser = async (req, res) => {
-  const authRequest = auth.handleRequest(req, res);
-  const session = await authRequest.validate();
-  if (session) {
-    return res.json(await getUserFrontendValues(session.user));
+  if (res.locals.session) {
+    return res.json(await getUserFrontendValues(res.locals.user));
   }
   return res.json(null);
 };
@@ -162,4 +152,8 @@ export const verifyEmail = async (req, res, next) => {
     }
     next(e);
   }
+};
+
+export const resetPassword = async (req, res) => {
+  return res.json({});
 };

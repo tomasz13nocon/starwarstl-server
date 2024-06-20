@@ -1,3 +1,8 @@
+/**
+ * This code is obsolete as of Lucia 3.0
+ * 2.0 only had Mongoose adapter so writing an adapter for bare mongoDB was necessary
+ */
+
 export const mongodb = (db) => {
   const users = db.collection("users");
   const keys = db.collection("keys");
@@ -146,7 +151,7 @@ export const createMongoValues = (object) => {
     Object.entries(object).map(([key, value]) => {
       if (key === "id") return ["_id", value];
       return [key, value];
-    })
+    }),
   );
 };
 
