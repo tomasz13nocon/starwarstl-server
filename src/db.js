@@ -1,11 +1,8 @@
 import { MongoClient } from "mongodb";
 
-export const watchedName = "__watched";
-export const watchlistName = "__watchlist";
-
 let connected = false;
 const client = new MongoClient(
-  "mongodb://127.0.0.1:27017/?directConnection=true",
+  "mongodb://127.0.0.1:27017/?directConnection=true&replicaSet=rs0",
 );
 
 const connect = async () => {

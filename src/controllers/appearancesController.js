@@ -11,7 +11,7 @@ export const getAppearances = async (req, res) => {
     .toArray();
   if (!colls.length) {
     console.log(`Invalid collection ${type}`);
-    res.sendStatus(404);
+    res.status(404).json({});
     return;
   }
 
@@ -30,8 +30,8 @@ export const getAppearances = async (req, res) => {
       db
         .collection(type)
         .find({}, { projection: { _id: 0 } })
-        .toArray()
-    )
+        .toArray(),
+    ),
   );
 };
 
@@ -43,14 +43,14 @@ export const getAppearance = async (req, res) => {
     .toArray();
   if (!colls.length) {
     console.log(`Invalid collection ${type}`);
-    res.sendStatus(404);
+    res.status(404).json({});
     return;
   }
 
   let appearances = await db.collection(type).findOne({ name: name });
 
   if (!appearances) {
-    res.sendStatus(404);
+    res.status(404).json({});
     return;
   }
 

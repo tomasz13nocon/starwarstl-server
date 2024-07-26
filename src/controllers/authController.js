@@ -1,4 +1,3 @@
-import { generateIdFromEntropySize } from "lucia";
 import { Argon2id } from "oslo/password";
 import {
   auth,
@@ -7,7 +6,9 @@ import {
   validateEmailVerificationToken,
 } from "../auth.js";
 import { TokenError } from "../auth.js";
-import { getDatabase, watchedName, watchlistName } from "../db.js";
+import { getDatabase } from "../db.js";
+import { validateEmail, validatePassword } from "./validators.js";
+import { projectList } from "../global.js";
 
 let db = await getDatabase();
 
@@ -15,17 +16,12 @@ const getUserFrontendValues = async (sessionUser) => {
   let lists = await db
     .collection("lists")
     // This might be a lucia user obj or mongodb user obj, so try both ID names
-    .find({ userId: sessionUser.id ?? sessionUser._id })
+    .find({ userId: sessionUser._id ?? sessionUser.id })
+    .sort({ createdAt: 1 })
     .toArray();
   let rv = {
     email: sessionUser.email,
-    lists: {
-      watched: lists.find((list) => list.name === watchedName)?.items ?? [],
-      watchlist: lists.find((list) => list.name === watchlistName)?.items ?? [],
-      custom: lists
-        .filter((list) => !list.name.startsWith("__"))
-        .map((list) => list.items),
-    },
+    lists: lists.map(projectList),
   };
   if (!sessionUser.emailVerified) rv.emailUnverified = true;
   return rv;
@@ -41,14 +37,11 @@ const createSession = async (res, userId) => {
 };
 
 export const signup = async (req, res, next) => {
-  const { email, password } = req.body;
+  const { email: emailRaw, password } = req.body;
 
-  if (typeof email !== "string" || !/.+@.+\..+/.test(email)) {
-    return res.json({ error: "Invalid email" });
-  }
-  if (typeof password !== "string" || password.length < 6) {
-    return res.json({ error: "Invalid password" });
-  }
+  const email = emailRaw.toLowerCase();
+  validateEmail(email);
+  validatePassword(password);
 
   const passwordHash = await new Argon2id().hash(password);
 
@@ -62,9 +55,25 @@ export const signup = async (req, res, next) => {
     const { insertedId: userId } = await db.collection("users").insertOne(user);
     user.id = userId;
 
-    // const token = await generateEmailVerificationToken(id);
+    await db.collection("lists").insertMany([
+      {
+        userId,
+        name: "Watched",
+        items: [],
+        createdAt: new Date(),
+      },
+      {
+        userId,
+        name: "Watchlist",
+        items: [],
+        createdAt: new Date(Date.now() + 1),
+      },
+    ]);
+
+    const token = await generateEmailVerificationToken(userId);
+
     // TODO no need to await
-    // await sendEmailVerificationLink(email, token);
+    await sendEmailVerificationLink(email, token);
 
     await createSession(res, userId);
 
@@ -78,25 +87,20 @@ export const signup = async (req, res, next) => {
 export const login = async (req, res, next) => {
   const { email, password } = req.body;
 
-  // TODO create verifyEmail and pw functions, code above
-  if (typeof email !== "string") {
-    return res.json({ error: "Invalid email" });
-  }
-  if (typeof password !== "string" || password.length < 6) {
-    return res.json({ error: "Invalid password" });
-  }
+  validateEmail(email);
+  validatePassword(password);
 
   const user = await db.collection("users").findOne({ email });
   if (user === null) {
-    return res.json({ error: "Incorrect email or password" });
+    return res.json({ error: "Account does not exist" });
   }
 
-  const validPassword = await new Argon2id().verify(
+  const isPasswordCorrect = await new Argon2id().verify(
     user.passwordHash,
     password,
   );
-  if (!validPassword) {
-    return res.json({ error: "Incorrect email or password" });
+  if (!isPasswordCorrect) {
+    return res.json({ error: "Incorrect password" });
   }
 
   await createSession(res, user._id);
@@ -104,56 +108,58 @@ export const login = async (req, res, next) => {
 };
 
 export const logout = async (req, res) => {
-  if (!res.locals.session) {
-    return res.json(null);
-  }
   await auth.invalidateSession(res.locals.session.id);
-  return res.json(null);
+  return res.json({});
 };
 
 export const getUser = async (req, res) => {
-  if (res.locals.session) {
-    return res.json(await getUserFrontendValues(res.locals.user));
-  }
-  return res.json(null);
+  return res.json(await getUserFrontendValues(res.locals.user));
 };
 
-export const sendEmailVerification = async (req, res) => {
-  const authRequest = auth.handleRequest(req, res);
-  const session = await authRequest.validate();
-  if (!session) {
-    return res.status(401).json({ error: "Not logged in" });
-  }
-  if (session.user.emailVerified) {
-    return res.json({ error: "Email already verified" }); // TODO error?
+export const resendEmailVerification = async (req, res) => {
+  if (res.locals.user.emailVerified) {
+    // TODO: proper status, so we can set client state to remove resend button
+    return res.status(410).json({ info: "Email already verified" });
   }
 
-  const token = await generateEmailVerificationToken(session.user.userId);
-  await sendEmailVerificationLink(session.user.email, token);
-  return res.json(null);
+  const token = await generateEmailVerificationToken(res.locals.user.id);
+  await sendEmailVerificationLink(res.locals.user.email, token);
+  return res.json({});
 };
 
 export const verifyEmail = async (req, res, next) => {
   const token = req.params.token;
+
+  if (res.locals.user?.emailVerified)
+    return res.json({ info: "Email already verified" });
+
   try {
     const userId = await validateEmailVerificationToken(token);
-    const user = await auth.getUser(userId);
-    await auth.invalidateAllUserSessions(user.userId);
-    await auth.updateUserAttributes(user.userId, {
-      emailVerified: true,
-    });
-    await createSession(req, res, user.userId);
-    return res.json(
-      await getUserFrontendValues(await auth.getUser(user.userId)),
-    );
-  } catch (e) {
-    if (e instanceof TokenError) {
-      return res.json({ error: e.message });
+
+    const usersColl = db.collection("users");
+
+    const user = await db.collection("users").findOne({ _id: userId });
+    if (!user) {
+      throw new Error("Trying to verify email for user who doesn't exist!");
     }
-    next(e);
+
+    await usersColl.updateOne(
+      { _id: userId },
+      { $set: { emailVerified: true } },
+    );
+    user.emailVerified = true;
+
+    await auth.invalidateUserSessions(userId);
+    await createSession(res, userId);
+
+    return res.json(await getUserFrontendValues(user));
+  } catch (e) {
+    if (e instanceof TokenError) return res.json({ error: e.message });
+    else next(e);
   }
 };
 
 export const resetPassword = async (req, res) => {
+  // TODO
   return res.json({});
 };
