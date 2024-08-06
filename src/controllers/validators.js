@@ -20,6 +20,11 @@ export function validateEmail(email) {
   throw new ClientError(422, "Invalid email");
 }
 
+export function validateUsername(name) {
+  if (typeof name === "string" && name.length >= 3 && name.length <= 32) return;
+  throw new ClientError(422, "Invalid username");
+}
+
 export function validatePassword(password) {
   if (typeof password === "string" && password.length >= 6) return;
   throw new ClientError(422, "Invalid password");

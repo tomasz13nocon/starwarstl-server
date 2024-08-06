@@ -26,6 +26,9 @@ import {
   resendEmailVerification,
   signup,
   verifyEmail,
+  loginWithGoogle,
+  googleCallback,
+  changeUser,
 } from "./controllers/authController.js";
 import {
   getAppearance,
@@ -38,6 +41,8 @@ import {
   errorHandler,
   jsonOnly,
 } from "./middlewares.js";
+import cookieParser from "cookie-parser";
+import { getRandomName } from "./names.js";
 
 const limiter = prod
   ? rateLimit({
@@ -66,19 +71,15 @@ app.set("trust proxy", 1 /* number of proxies between user and server */);
 app.use(cors());
 app.use(express.json());
 app.use(compression());
+app.use(cookieParser());
 
 app.use(csrf);
 app.use(jsonOnly);
 app.use(authSetup);
 
 const router = express.Router();
-const routerProtected = express.Router();
 const authRouter = express.Router();
-const authRouterProtected = express.Router();
 const appearancesRouter = express.Router();
-
-routerProtected.use(authenticate);
-authRouterProtected.use(authenticate);
 
 router.get("/media", getAllMedia);
 router.get("/media/:id", getMedia);
@@ -87,21 +88,25 @@ router.get("/media-random", getMediaRandom);
 router.get("/series", getAllSeries);
 
 // router.get("/lists", getUserLists); // unused - we get this from /auth/user
-routerProtected.post("/lists", createList);
-routerProtected.delete("/lists/:listName", deleteList);
-routerProtected.post("/lists/:listName", addToList);
-routerProtected.get("/lists/:listName", getUserList);
-routerProtected.patch("/lists/:listName", updateList);
+router.post("/lists", authenticate, createList);
+router.delete("/lists/:listName", authenticate, deleteList);
+router.post("/lists/:listName", authenticate, addToList);
+router.get("/lists/:listName", authenticate, getUserList);
+router.patch("/lists/:listName", authenticate, updateList);
 
 authRouter.post("/signup", strictLimiter, signup);
 authRouter.post("/login", limiter, login);
+authRouter.get("/login/google", limiter, loginWithGoogle);
+authRouter.get("/login/google/callback", limiter, googleCallback);
 authRouter.post("/reset-password", strictLimiter, resetPassword);
 authRouter.get("/email-verification/:token", limiter, verifyEmail);
+authRouter.get("/user", getUser);
 
-authRouterProtected.get("/user", getUser);
-authRouterProtected.post("/logout", logout);
-authRouterProtected.post(
+authRouter.patch("/user", authenticate, changeUser);
+authRouter.post("/logout", authenticate, logout);
+authRouter.post(
   "/email-verification",
+  authenticate,
   strictLimiter,
   resendEmailVerification,
 );
@@ -113,13 +118,15 @@ app.use("/api", router);
 app.use("/api/auth", authRouter);
 app.use("/api/appearances", appearancesRouter);
 
-app.use("/api", routerProtected);
-app.use("/api/auth", authRouterProtected);
-
-// app.get("/api/test/", (req, res) => {
-//   console.log(req.body.foo);
-//   res.sendStatus(200);
-// });
+app.get("/api/test/", (req, res) => {
+  res.cookie("test-cookie", "test-value", {
+    httpOnly: true,
+    secure: prod,
+    maxAge: 60 * 10 * 1000,
+    path: "/",
+  });
+  res.sendStatus(200);
+});
 
 // Must be last
 app.use(errorHandler);

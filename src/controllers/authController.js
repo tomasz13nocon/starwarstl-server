@@ -2,13 +2,25 @@ import { Argon2id } from "oslo/password";
 import {
   auth,
   generateEmailVerificationToken,
+  google,
   sendEmailVerificationLink,
   validateEmailVerificationToken,
 } from "../auth.js";
 import { TokenError } from "../auth.js";
 import { getDatabase } from "../db.js";
-import { validateEmail, validatePassword } from "./validators.js";
-import { projectList } from "../global.js";
+import {
+  validateEmail,
+  validatePassword,
+  validateUsername,
+} from "./validators.js";
+import { prod, projectList } from "../global.js";
+import {
+  OAuth2RequestError,
+  decodeIdToken,
+  generateCodeVerifier,
+  generateState,
+} from "arctic";
+import { getRandomName } from "../names.js";
 
 let db = await getDatabase();
 
@@ -21,6 +33,7 @@ const getUserFrontendValues = async (sessionUser) => {
     .toArray();
   let rv = {
     email: sessionUser.email,
+    name: sessionUser.name,
     lists: lists.map(projectList),
   };
   if (!sessionUser.emailVerified) rv.emailUnverified = true;
@@ -36,55 +49,71 @@ const createSession = async (res, userId) => {
   return session;
 };
 
+const newSession = async (res, user) => {
+  await createSession(res, user.id ?? user._id);
+  return res.json(await getUserFrontendValues(user));
+};
+
+const createUser = async (user) => {
+  const { insertedId: userId } = await db.collection("users").insertOne(user);
+  user.id = userId;
+
+  await db.collection("lists").insertMany([
+    {
+      userId,
+      name: "Watched",
+      items: [],
+      createdAt: new Date(),
+    },
+    {
+      userId,
+      name: "Watchlist",
+      items: [],
+      createdAt: new Date(Date.now() + 1),
+    },
+  ]);
+
+  return user;
+};
+
 export const signup = async (req, res, next) => {
-  const { email: emailRaw, password } = req.body;
+  const { email: emailRaw, password, name } = req.body;
 
   const email = emailRaw.toLowerCase();
   validateEmail(email);
+  validateUsername(name);
   validatePassword(password);
 
   const passwordHash = await new Argon2id().hash(password);
 
   try {
-    const user = {
+    const user = await createUser({
+      authType: "email",
+      name,
       email,
       emailVerified: false,
-      createdAt: new Date(),
       passwordHash,
-    };
-    const { insertedId: userId } = await db.collection("users").insertOne(user);
-    user.id = userId;
+      createdAt: new Date(),
+    });
 
-    await db.collection("lists").insertMany([
-      {
-        userId,
-        name: "Watched",
-        items: [],
-        createdAt: new Date(),
-      },
-      {
-        userId,
-        name: "Watchlist",
-        items: [],
-        createdAt: new Date(Date.now() + 1),
-      },
-    ]);
-
-    const token = await generateEmailVerificationToken(userId);
-
+    const token = await generateEmailVerificationToken(user.id);
     // TODO no need to await
     await sendEmailVerificationLink(email, token);
 
-    await createSession(res, userId);
-
-    return res.json(await getUserFrontendValues(user));
+    return await newSession(res, user);
   } catch (e) {
-    if (e.code === 11000) return res.json({ error: "Email already taken" });
-    else return next(e);
+    if (e.code === 11000) {
+      if ("email" in e.keyValue) {
+        return res.json({ error: "Email already taken" });
+      } else {
+        return res.json({ error: "Username already taken" });
+      }
+    }
+    return next(e);
   }
 };
 
-export const login = async (req, res, next) => {
+export const login = async (req, res) => {
   const { email, password } = req.body;
 
   validateEmail(email);
@@ -103,8 +132,97 @@ export const login = async (req, res, next) => {
     return res.json({ error: "Incorrect password" });
   }
 
-  await createSession(res, user._id);
-  return res.json(await getUserFrontendValues(user));
+  return await newSession(res, user);
+};
+
+export const loginWithGoogle = async (req, res) => {
+  const state = generateState();
+  const code = generateCodeVerifier();
+  const url = google.createAuthorizationURL(state, code, ["profile", "email"]);
+  url.searchParams.set("access_type", "offline");
+
+  res.cookie("google_oauth_state", state, {
+    httpOnly: true,
+    secure: prod, // set `Secure` flag in HTTPS
+    maxAge: 1000 * 60 * 10, // 10 minutes
+    path: "/",
+  });
+  res.cookie("google_oauth_code_verifier", code, {
+    secure: true, // set to false in localhost
+    path: "/",
+    httpOnly: true,
+    maxAge: 1000 * 60 * 10, // 10 min
+  });
+
+  res.json({ authorizationUrl: url.toString() });
+};
+
+export const googleCallback = async (req, res) => {
+  res
+    .status(302)
+    .set(
+      "Location",
+      (prod ? "https://starwarstl.com/" : "http://localhost:8080/") +
+        "login/google/callback",
+    );
+
+  const stateCookie = req.cookies.google_oauth_state;
+  const codeCookie = req.cookies.google_oauth_code_verifier;
+  const state = req.query.state;
+  const code = req.query.code;
+
+  // verify state
+  if (!codeCookie || !stateCookie || !code || stateCookie !== state) {
+    return res
+      .status(400)
+      .json({ error: "code or state missing or incorrect" });
+  }
+
+  try {
+    const tokens = await google.validateAuthorizationCode(code, codeCookie);
+    const idToken = tokens.idToken();
+    const claims = decodeIdToken(idToken);
+
+    const existingUser = await db
+      .collection("users")
+      .findOne({ authType: "google", oauthId: claims.sub });
+
+    if (existingUser) {
+      return await newSession(res, existingUser);
+    }
+
+    let name, nameTaken;
+    do {
+      // Collision won't be an issue up to 1+ million google users. This will be a great problem to have.
+      name = getRandomName();
+      nameTaken = (await db.collection("users").findOne({ name })) !== null;
+    } while (nameTaken);
+
+    const user = await createUser({
+      authType: "google",
+      name,
+      email: claims.email,
+      emailVerified: claims.email_verified,
+      createdAt: new Date(),
+      oauthId: claims.sub,
+      pictureUrl: claims.picture,
+    });
+
+    return await newSession(res, user);
+  } catch (e) {
+    if (e instanceof OAuth2RequestError) {
+      const { request, message, description } = e;
+      // console.error(request, message, description);
+      return res.status(400).json({ error: description });
+    }
+    if (e.code === 11000) {
+      // if ("name" in e.keyValue) {
+      //   return res.json({ error: "Username already taken" });
+      // }
+      console.error("Unreachable");
+    }
+    throw e;
+  }
 };
 
 export const logout = async (req, res) => {
@@ -113,12 +231,31 @@ export const logout = async (req, res) => {
 };
 
 export const getUser = async (req, res) => {
+  if (!res.locals.session) return res.status(401).json({});
   return res.json(await getUserFrontendValues(res.locals.user));
+};
+
+export const changeUser = async (req, res) => {
+  const { name } = req.body;
+
+  validateUsername(name);
+
+  try {
+    await db
+      .collection("users")
+      .updateOne({ _id: res.locals.user.id }, { $set: { name } });
+
+    return res.json({});
+  } catch (e) {
+    if (e.code === 11000) {
+      return res.status(409).json({ error: "Username taken" });
+    }
+    throw e;
+  }
 };
 
 export const resendEmailVerification = async (req, res) => {
   if (res.locals.user.emailVerified) {
-    // TODO: proper status, so we can set client state to remove resend button
     return res.status(410).json({ info: "Email already verified" });
   }
 
@@ -150,9 +287,8 @@ export const verifyEmail = async (req, res, next) => {
     user.emailVerified = true;
 
     await auth.invalidateUserSessions(userId);
-    await createSession(res, userId);
 
-    return res.json(await getUserFrontendValues(user));
+    return await newSession(res, user);
   } catch (e) {
     if (e instanceof TokenError) return res.json({ error: e.message });
     else next(e);

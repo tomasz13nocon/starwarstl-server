@@ -3,6 +3,7 @@ import { MongodbAdapter } from "@lucia-auth/adapter-mongodb";
 import { getDatabase, startSession } from "./db.js";
 import { prod } from "./global.js";
 import nodemailer from "nodemailer";
+import { Google } from "arctic";
 import { TimeSpan, createDate, isWithinExpirationDate } from "oslo";
 
 let db = await getDatabase();
@@ -25,14 +26,31 @@ export const auth = new Lucia(adapter, {
       secure: prod,
     },
   },
-  getUserAttributes: ({ email, emailVerified, createdAt }) => {
+  getUserAttributes: ({
+    name,
+    authType,
+    email,
+    emailVerified,
+    oauthId,
+    createdAt,
+  }) => {
     return {
+      name,
+      authType,
       email,
       emailVerified,
+      oauthId,
       createdAt,
     };
   },
 });
+
+export const google = new Google(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  (prod ? "https://starwarstl.com/" : "http://localhost:8080/") +
+    "api/auth/login/google/callback",
+);
 
 export const generateEmailVerificationToken = async (userId) => {
   const tokensColl = db.collection("emailVerificationTokens");

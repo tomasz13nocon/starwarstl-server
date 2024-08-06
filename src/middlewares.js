@@ -64,7 +64,11 @@ export async function authSetup(req, res, next) {
 // Auth middleware (401 if not authenticated)
 export function authenticate(req, res, next) {
   if (!res.locals.session)
-    throw new ClientError(401, "This action requires you to be logged in");
+    throw new ClientError(
+      401,
+      "This action requires you to be logged in",
+      false,
+    );
   next();
 }
 
