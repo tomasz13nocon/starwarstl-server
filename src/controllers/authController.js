@@ -35,6 +35,7 @@ const getUserFrontendValues = async (sessionUser) => {
     email: sessionUser.email,
     name: sessionUser.name,
     lists: lists.map(projectList),
+    authType: sessionUser.authType,
   };
   if (!sessionUser.emailVerified) rv.emailUnverified = true;
   return rv;
@@ -233,6 +234,18 @@ export const logout = async (req, res) => {
 export const getUser = async (req, res) => {
   if (!res.locals.session) return res.status(401).json({});
   return res.json(await getUserFrontendValues(res.locals.user));
+};
+
+export const getUserByName = async (req, res) => {
+  const { name } = req.params;
+
+  validateUsername(name, true);
+
+  let user = await db.collection("users").findOne({ name });
+
+  if (!user) return res.status(404).json({});
+
+  return res.json({ name });
 };
 
 export const changeUser = async (req, res) => {

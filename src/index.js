@@ -29,6 +29,7 @@ import {
   loginWithGoogle,
   googleCallback,
   changeUser,
+  getUserByName,
 } from "./controllers/authController.js";
 import {
   getAppearance,
@@ -100,8 +101,9 @@ authRouter.get("/login/google", limiter, loginWithGoogle);
 authRouter.get("/login/google/callback", limiter, googleCallback);
 authRouter.post("/reset-password", strictLimiter, resetPassword);
 authRouter.get("/email-verification/:token", limiter, verifyEmail);
-authRouter.get("/user", getUser);
+authRouter.get("/users/:name", getUserByName);
 
+authRouter.get("/user", getUser);
 authRouter.patch("/user", authenticate, changeUser);
 authRouter.post("/logout", authenticate, logout);
 authRouter.post(
