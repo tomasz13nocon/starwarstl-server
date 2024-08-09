@@ -192,6 +192,8 @@ export const googleCallback = async (req, res) => {
       return await newSession(res, existingUser);
     }
 
+    res.append("Location", "?newaccount=true");
+
     let name, nameTaken;
     do {
       // Collision won't be an issue up to 1+ million google users. This will be a great problem to have.
