@@ -3,7 +3,7 @@ import cors from "cors";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import "dotenv/config";
-import { prod } from "./global.js";
+import { prod, sendEmail } from "./global.js";
 import {
   getMedia,
   getMediaField,
@@ -43,7 +43,7 @@ import {
   jsonOnly,
 } from "./middlewares.js";
 import cookieParser from "cookie-parser";
-import { getRandomName } from "./names.js";
+import { getMetaInfo } from "./controllers/defaultController.js";
 
 const limiter = prod
   ? rateLimit({
@@ -87,6 +87,7 @@ router.get("/media/:id", getMedia);
 router.get("/media/:id/:field", getMediaField);
 router.get("/media-random", getMediaRandom);
 router.get("/series", getAllSeries);
+router.get("/meta", getMetaInfo);
 
 // router.get("/lists", getUserLists); // unused - we get this from /auth/user
 router.post("/lists", authenticate, createList);
@@ -121,12 +122,6 @@ app.use("/api/auth", authRouter);
 app.use("/api/appearances", appearancesRouter);
 
 app.get("/api/test/", (req, res) => {
-  res.cookie("test-cookie", "test-value", {
-    httpOnly: true,
-    secure: prod,
-    maxAge: 60 * 10 * 1000,
-    path: "/",
-  });
   res.sendStatus(200);
 });
 

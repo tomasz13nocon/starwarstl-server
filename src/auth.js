@@ -1,8 +1,7 @@
 import { Lucia, generateIdFromEntropySize } from "lucia";
 import { MongodbAdapter } from "@lucia-auth/adapter-mongodb";
 import { getDatabase, startSession } from "./db.js";
-import { prod } from "./global.js";
-import nodemailer from "nodemailer";
+import { prod, sendEmail } from "./global.js";
 import { Google } from "arctic";
 import { TimeSpan, createDate, isWithinExpirationDate } from "oslo";
 
@@ -122,23 +121,5 @@ Click this link to verify your email: ${url}`;
     </div>
 </div>`;
 
-  const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.MAILBOT_USER,
-      pass: process.env.MAILBOT_PASS,
-    },
-  });
-  const info = await transporter.sendMail({
-    from: process.env.MAILBOT_FROM,
-    to: email,
-    subject: "Verify your email",
-    text: emailText,
-    html: emailHtml,
-  });
-  if (info.rejected.length > 0) {
-    throw new Error("Failed to send email, response: " + info.response);
-  }
+  sendEmail(email, "Verify your email", emailHtml, emailText);
 };
