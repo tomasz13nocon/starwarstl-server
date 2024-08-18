@@ -1,4 +1,5 @@
 import { MongoClient } from "mongodb";
+import { dbName } from "./global";
 
 let connected = false;
 const client = new MongoClient(
@@ -16,7 +17,7 @@ const connect = async () => {
 
 export const getDatabase = async () => {
   await connect();
-  return client.db("starwarstl");
+  return client.db(dbName);
 };
 
 export const startSession = async () => {

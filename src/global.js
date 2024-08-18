@@ -4,6 +4,11 @@ export const env = process.env.NODE_ENV || "dev"; // dev | prod
 export const dev = env === "dev";
 export const prod = env === "prod";
 
+export const baseUrl = prod
+  ? "https://starwarstl.com/"
+  : "http://localhost:8080/";
+export const dbName = process.env.DB_NAME ?? "starwarstl";
+
 export const builtinLists = ["Watched", "Watchlist"];
 
 // TODO proper logging, analytics

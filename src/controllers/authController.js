@@ -13,7 +13,7 @@ import {
   validatePassword,
   validateUsername,
 } from "./validators.js";
-import { prod, projectList } from "../global.js";
+import { baseUrl, prod, projectList } from "../global.js";
 import {
   OAuth2RequestError,
   decodeIdToken,
@@ -159,13 +159,7 @@ export const loginWithGoogle = async (req, res) => {
 };
 
 export const googleCallback = async (req, res) => {
-  res
-    .status(302)
-    .set(
-      "Location",
-      (prod ? "https://starwarstl.com/" : "http://localhost:8080/") +
-        "login/google/callback",
-    );
+  res.status(302).set("Location", baseUrl + "login/google/callback");
 
   const stateCookie = req.cookies.google_oauth_state;
   const codeCookie = req.cookies.google_oauth_code_verifier;

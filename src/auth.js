@@ -1,7 +1,7 @@
 import { Lucia, generateIdFromEntropySize } from "lucia";
 import { MongodbAdapter } from "@lucia-auth/adapter-mongodb";
 import { getDatabase, startSession } from "./db.js";
-import { prod, sendEmail } from "./global.js";
+import { baseUrl, prod, sendEmail } from "./global.js";
 import { Google } from "arctic";
 import { TimeSpan, createDate, isWithinExpirationDate } from "oslo";
 
@@ -47,8 +47,7 @@ export const auth = new Lucia(adapter, {
 export const google = new Google(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  (prod ? "https://starwarstl.com/" : "http://localhost:8080/") +
-    "api/auth/login/google/callback",
+  baseUrl + "api/auth/login/google/callback",
 );
 
 export const generateEmailVerificationToken = async (userId) => {
@@ -97,9 +96,7 @@ export const validateEmailVerificationToken = async (token) => {
 };
 
 export const sendEmailVerificationLink = async (email, token) => {
-  const url = `${
-    prod ? "https://starwarstl.com/" : "http://localhost:8080/"
-  }email-verification/${token}`;
+  const url = `${baseUrl}email-verification/${token}`;
   const emailText = `You have created an account on https://starwarstl.com.
 
 Click this link to verify your email: ${url}`;
