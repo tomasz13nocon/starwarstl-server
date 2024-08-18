@@ -7,7 +7,8 @@ export const prod = env === "prod";
 export const baseUrl = prod
   ? "https://starwarstl.com/"
   : "http://localhost:8080/";
-export const dbName = process.env.DB_NAME ?? "starwarstl";
+export const dbName = process.env.DB_NAME || "starwarstl";
+export const port = +process.env.PORT || 5000;
 
 export const builtinLists = ["Watched", "Watchlist"];
 

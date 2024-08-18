@@ -3,7 +3,7 @@ import cors from "cors";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import "dotenv/config";
-import { prod, sendEmail } from "./global.js";
+import { port, prod } from "./global.js";
 import {
   getMedia,
   getMediaField,
@@ -128,7 +128,6 @@ app.get("/api/test/", (req, res) => {
 // Must be last
 app.use(errorHandler);
 
-const PORT = 5000;
-app.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`Server started on port ${port}`);
 });

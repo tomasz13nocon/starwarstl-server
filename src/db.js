@@ -1,5 +1,5 @@
 import { MongoClient } from "mongodb";
-import { dbName } from "./global";
+import { dbName } from "./global.js";
 
 let connected = false;
 const client = new MongoClient(
