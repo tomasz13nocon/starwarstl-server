@@ -17,6 +17,8 @@ export function csrf(req, res, next) {
     !verifyRequestOrigin(originHeader, [hostHeader])
   ) {
     // TODO log, analytics
+    console.error("Origin:", originHeader);
+    console.error("Host:", hostHeader);
     return res.status(403).json({});
   }
   next();
