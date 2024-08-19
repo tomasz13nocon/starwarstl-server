@@ -159,7 +159,8 @@ export const loginWithGoogle = async (req, res) => {
 };
 
 export const googleCallback = async (req, res) => {
-  res.status(302).set("Location", baseUrl + "login/google/callback");
+  const redirectLocation = baseUrl + "login/google/callback";
+  res.status(302).set("Location", redirectLocation);
 
   const stateCookie = req.cookies.google_oauth_state;
   const codeCookie = req.cookies.google_oauth_code_verifier;
@@ -186,7 +187,7 @@ export const googleCallback = async (req, res) => {
       return await newSession(res, existingUser);
     }
 
-    res.append("Location", "?newaccount=true");
+    res.set("Location", redirectLocation + "?newaccount=true");
 
     let name, nameTaken;
     do {

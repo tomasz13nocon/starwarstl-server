@@ -7,8 +7,25 @@ export const prod = env === "prod";
 export const baseUrl = prod
   ? "https://starwarstl.com/"
   : "http://localhost:8080/";
-export const dbName = process.env.DB_NAME || "starwarstl";
-export const port = +process.env.PORT || 5000;
+export const dbName = "starwarstl";
+export const port = +process.env.PORT;
+export const redisURI = process.env.REDIS_URI;
+export const mongoURI = process.env.MONGO_URI;
+
+const requiredEnv = [
+  "PORT",
+  "REDIS_URI",
+  "MONGO_URI",
+  "MAIL_FROM",
+  "SES_USER",
+  "SES_PASS",
+  "SES_ENDPOINT",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+];
+if (requiredEnv.some((name) => !process.env[name])) {
+  throw new Error("Required env vars not present!");
+}
 
 export const builtinLists = ["Watched", "Watchlist"];
 

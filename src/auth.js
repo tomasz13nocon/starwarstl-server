@@ -56,7 +56,6 @@ export const generateEmailVerificationToken = async (userId) => {
   tokensColl.deleteMany({ userId });
 
   const token = generateIdFromEntropySize(25); // 40 characters long
-  console.log("generated token:", token);
 
   await tokensColl.insertOne({
     token,
@@ -82,10 +81,10 @@ export const validateEmailVerificationToken = async (token) => {
     await session.endSession();
   }
 
-  console.log("type of expiresAt: ", typeof storedToken.expiresAt);
-  const expiresAt = Number(storedToken.expiresAt); // TODO types
-  console.log("expiresAt: ", storedToken.expiresAt);
-  console.log("Number(expiresAt): ", expiresAt);
+  // console.log("type of expiresAt: ", typeof storedToken.expiresAt);
+  // const expiresAt = Number(storedToken.expiresAt); // TODO types
+  // console.log("expiresAt: ", storedToken.expiresAt);
+  // console.log("Number(expiresAt): ", expiresAt);
 
   if (!isWithinExpirationDate(storedToken.expiresAt)) {
     throw new TokenError(

@@ -1,26 +1,66 @@
 import { MongoClient } from "mongodb";
-import { dbName } from "./global.js";
+import { dbName, mongoURI } from "./global.js";
 
-let connected = false;
-const client = new MongoClient(
-  "mongodb://127.0.0.1:27017/?directConnection=true&replicaSet=rs0",
-);
+const client = new MongoClient(mongoURI);
 
-const connect = async () => {
-  if (!connected) {
-    process.stdout.write("Connecting to the DB...");
-    await client.connect();
-    console.log(" Connected!");
-    connected = true;
-  }
+let initPromise;
+
+const init = async () => {
+  process.stdout.write("Connecting to the DB...");
+  await client.connect();
+  console.log(" Connected!");
+
+  const db = client.db(dbName);
+
+  // Indexes
+  await db.collection("media").createIndex(
+    { pageid: 1 },
+    {
+      unique: true,
+      partialFilterExpression: {
+        notUnique: { $in: [false, null] },
+        pageid: { $exists: true },
+      },
+    },
+  );
+  await db.collection("lists").createIndex(
+    { userId: 1, name: 1 },
+    {
+      unique: true,
+      collation: {
+        locale: "en",
+        strength: 2,
+      },
+    },
+  );
+  await db
+    .collection("users")
+    .createIndex(
+      { email: 1 },
+      { unique: true, partialFilterExpression: { authType: "email" } },
+    );
+  await db
+    .collection("users")
+    .createIndex(
+      { oauthId: 1 },
+      { unique: true, partialFilterExpression: { authType: "google" } },
+    );
+  await db.collection("users").createIndex({ name: 1 }, { unique: true });
 };
 
+async function ensureInit() {
+  if (!initPromise) {
+    initPromise = init();
+  }
+  await initPromise;
+}
+
 export const getDatabase = async () => {
-  await connect();
+  await ensureInit();
   return client.db(dbName);
 };
 
 export const startSession = async () => {
-  await connect();
+  await ensureInit();
   return client.startSession();
 };

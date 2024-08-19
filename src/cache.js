@@ -1,7 +1,10 @@
 import { createClient } from "redis";
+import { redisURI } from "./global.js";
 
-const redis = createClient();
-redis.on("error", (err) => console.log("Redis Client Error", err));
+const redis = createClient({
+  url: redisURI,
+});
+redis.on("error", (err) => console.error("Redis Client Error", err));
 await redis.connect();
 
 // Returns data returned by awaiting `missCb`,

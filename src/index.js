@@ -3,7 +3,7 @@ import cors from "cors";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import "dotenv/config";
-import { port, prod } from "./global.js";
+import { baseUrl, port, prod } from "./global.js";
 import {
   getMedia,
   getMediaField,
@@ -47,12 +47,12 @@ import { getMetaInfo } from "./controllers/defaultController.js";
 
 const limiter = prod
   ? rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      limit: 30,
-      standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-      legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-      message: { error: "Too many requests, try again later." },
-    })
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    limit: 30,
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    message: { error: "Too many requests, try again later." },
+  })
   : (req, res, next) => next();
 const strictLimiter = // prod ?
   rateLimit({
@@ -122,7 +122,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/appearances", appearancesRouter);
 
 app.get("/api/test/", (req, res) => {
-  res.sendStatus(200);
+  res.status(200).send("HELLO");
 });
 
 // Must be last

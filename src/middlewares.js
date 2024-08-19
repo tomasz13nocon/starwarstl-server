@@ -1,22 +1,23 @@
 import { auth } from "./auth.js";
 import { verifyRequestOrigin } from "lucia";
-import { ClientError, logError } from "./global.js";
+import { ClientError, dev, logError } from "./global.js";
 
 // CSRF protection using Origin header, might not work in some pre 2020 browsers
 export function csrf(req, res, next) {
-  if (req.method === "GET") {
+  if (req.method === "GET" || dev) {
     return next();
   }
   const originHeader = req.headers.origin ?? null;
   // NOTE: You may need to use `X-Forwarded-Host` instead
   const hostHeader = req.headers.host ?? null;
+
   if (
     !originHeader ||
     !hostHeader ||
     !verifyRequestOrigin(originHeader, [hostHeader])
   ) {
     // TODO log, analytics
-    return res.status(403).end();
+    return res.status(403).json({});
   }
   next();
 }
