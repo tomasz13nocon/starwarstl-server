@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 
-export const env = process.env.NODE_ENV || "dev"; // dev | prod
+export const env = process.env.NODE_ENV; // dev | prod
 export const dev = env === "dev";
 export const prod = env === "prod";
 
@@ -13,6 +13,7 @@ export const redisURI = process.env.REDIS_URI;
 export const mongoURI = process.env.MONGO_URI;
 
 const requiredEnv = [
+  "NODE_ENV",
   "PORT",
   "REDIS_URI",
   "MONGO_URI",
