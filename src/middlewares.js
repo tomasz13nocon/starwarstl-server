@@ -10,13 +10,15 @@ export function csrf(req, res, next) {
   const originHeader = req.headers.origin ?? null;
   // NOTE: You may need to use `X-Forwarded-Host` instead
   const hostHeader = req.headers.host ?? null;
+  const forwardedHost = req.headers["X-Forwarded-Host"];
 
   if (
     !originHeader ||
     !hostHeader ||
-    !verifyRequestOrigin(originHeader, [hostHeader])
+    !verifyRequestOrigin(originHeader, [hostHeader, forwardedHost])
   ) {
     // TODO log, analytics
+    console.error("CSRF protection activated!");
     console.error("Origin:", originHeader);
     console.error("Host:", hostHeader);
     return res.status(403).json({});
