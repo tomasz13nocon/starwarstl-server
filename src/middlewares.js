@@ -8,9 +8,8 @@ export function csrf(req, res, next) {
     return next();
   }
   const originHeader = req.headers.origin ?? null;
-  // NOTE: You may need to use `X-Forwarded-Host` instead
   const hostHeader = req.headers.host ?? null;
-  const forwardedHost = req.headers["X-Forwarded-Host"];
+  const forwardedHost = req.headers["X-Forwarded-Host"] ?? null;
 
   if (
     !originHeader ||
@@ -21,6 +20,7 @@ export function csrf(req, res, next) {
     console.error("CSRF protection activated!");
     console.error("Origin:", originHeader);
     console.error("Host:", hostHeader);
+    console.error("X-Forwarded-Host:", forwardedHost);
     return res.status(403).json({});
   }
   next();
