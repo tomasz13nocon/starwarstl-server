@@ -1,5 +1,4 @@
 import express from "express";
-import cors from "cors";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import "dotenv/config";
@@ -69,7 +68,6 @@ const app = express();
 // Show user IPs, required for rate limiter
 app.set("trust proxy", 1 /* number of proxies between user and server */);
 
-app.use(cors());
 app.use(express.json());
 app.use(compression());
 app.use(cookieParser());

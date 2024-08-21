@@ -58,6 +58,16 @@ export function projectList(list) {
 
 export async function sendEmail(reciepient, subject, emailHtml, emailText) {
   // Uses AWS SMTP endpoint (as opposed to aws sdk)
+
+  if (dev) {
+    console.log(
+      `sendEmail called. Not sending due to dev environment.
+Would send "${subject}" to "${reciepient}" with content:
+============
+${emailHtml ?? emailText}
+============`,
+    );
+  }
   const transporter = nodemailer.createTransport({
     host: process.env.SES_ENDPOINT,
     port: 587,
