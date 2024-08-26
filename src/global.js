@@ -52,6 +52,7 @@ export function projectList(list) {
   return {
     name: list.name,
     items: list.items,
+    missingItems: list.missingItems,
     createdAt: list.createdAt,
   };
 }

@@ -37,6 +37,14 @@ export const getUserList = async (req, res) => {
           },
         },
         {
+          $lookup: {
+            from: "missingMedia",
+            localField: "items",
+            foreignField: "pageid",
+            as: "missingItemsTemp",
+          },
+        },
+        {
           // This is needed, because if `items` is an empty array, it matches all media where pageid is not present ([] == undefined apparently)
           $addFields: {
             items: {
@@ -44,6 +52,13 @@ export const getUserList = async (req, res) => {
                 if: { $eq: ["$items", []] },
                 then: [],
                 else: "$itemsTemp",
+              },
+            },
+            missingItems: {
+              $cond: {
+                if: { $eq: ["$items", []] },
+                then: [],
+                else: "$missingItemsTemp",
               },
             },
           },
@@ -57,12 +72,18 @@ export const getUserList = async (req, res) => {
             "items.type": 1,
             "items.fullType": 1,
             "items.pageid": 1,
+            "missingItems.title": 1,
+            "missingItems.type": 1,
+            "missingItems.fullType": 1,
+            "missingItems.pageid": 1,
           },
         },
       ],
       { collation: { locale: "en", strength: 2 } },
     )
     .next();
+
+  console.log(result);
 
   // List doesn't exist
   if (result === null) {
@@ -85,7 +106,7 @@ export const addToList = async (req, res) => {
     .collection("media")
     .distinct("pageid", { pageid: { $in: pageids } });
   if (result.length !== pageids.length)
-    throw new ClientError(422, "Some pageids are incorrect");
+    throw new ClientError(422, "This media no longer exists");
 
   // transaction
   // result = await db.collection("lists").findOne(

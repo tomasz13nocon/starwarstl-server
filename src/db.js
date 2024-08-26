@@ -23,6 +23,16 @@ const init = async () => {
       },
     },
   );
+  await db.collection("missingMedia").createIndex(
+    { pageid: 1 },
+    {
+      unique: true,
+      partialFilterExpression: {
+        notUnique: { $in: [false, null] },
+        pageid: { $exists: true },
+      },
+    },
+  );
   await db.collection("lists").createIndex(
     { userId: 1, name: 1 },
     {
