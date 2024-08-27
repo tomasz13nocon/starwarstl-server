@@ -26,7 +26,7 @@ services:
     volumes:
       - mongodb_data:/data/db
       - ./mongoInit.js:/docker-entrypoint-initdb.d/init.js
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    command: ["--replSet", "rs0", "--bind_ip_all", "--quiet"]
     healthcheck:
       test: >
         bash -c "
