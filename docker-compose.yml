@@ -8,6 +8,7 @@ services:
       - REDIS_URI=redis://redis:6379
       - PORT=5000
       - NODE_ENV=${NODE_ENV:-dev}
+    restart: "unless-stopped"
     depends_on:
       - redis
       - mongodb
@@ -16,6 +17,7 @@ services:
     image: "redis:alpine"
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    restart: "unless-stopped"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
 
@@ -27,11 +29,12 @@ services:
       - mongodb_data:/data/db
       - ./mongoInit.js:/docker-entrypoint-initdb.d/init.js
     command: ["--replSet", "rs0", "--bind_ip_all", "--quiet"]
+    restart: "unless-stopped"
     healthcheck:
       test: >
         bash -c "
-        mongosh --eval 'db.adminCommand(\"ping\")' || exit 1;
-        mongosh --eval 'rs.status().ok' | grep '1' || exit 1;
+        mongosh --quiet --eval 'db.adminCommand(\"ping\")' || exit 1;
+        mongosh --quiet --eval 'rs.status().ok' | grep '1' || exit 1;
         "
       interval: 10s
       timeout: 5s

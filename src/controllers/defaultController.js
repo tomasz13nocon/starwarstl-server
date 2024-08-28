@@ -1,11 +1,16 @@
+import { cache } from "../cache.js";
 import { getDatabase } from "../db.js";
 
 let db = await getDatabase();
 
 export async function getMetaInfo(req, res) {
-  const info = await db.collection("meta").findOne();
-  const mediaCount = await db.collection("media").countDocuments();
-  const characterCount = await db.collection("characters").countDocuments();
+  const info = await cache("meta", () => db.collection("meta").findOne());
+  const mediaCount = await cache("mediaCount", () =>
+    db.collection("media").countDocuments(),
+  );
+  const characterCount = await cache("characterCount", () =>
+    db.collection("characters").countDocuments(),
+  );
   const randomCharacter = (
     await db
       .collection("characters")
