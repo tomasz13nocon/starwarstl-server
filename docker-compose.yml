@@ -28,6 +28,7 @@ services:
     volumes:
       - mongodb_data:/data/db
       - ./mongoInit.js:/docker-entrypoint-initdb.d/init.js
+      - ../dump:/dump
     command: ["--replSet", "rs0", "--bind_ip_all", "--quiet"]
     restart: "unless-stopped"
     healthcheck:
